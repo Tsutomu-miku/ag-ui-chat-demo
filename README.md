@@ -1,8 +1,8 @@
 # AG-UI Chat Demo
 
-A best-practice demonstration of the [AG-UI Protocol](https://docs.ag-ui.com) with LangChain/LangGraph.
+A best-practice demonstration of the [AG-UI Protocol](https://docs.ag-ui.com) with LangGraph.
 This project shows how to properly build an AI chat application using `@ag-ui/encoder`,
-`@ag-ui/langchain`, backend tools, frontend tools (human-in-the-loop), and backend-managed
+`@langchain/langgraph`, backend tools, frontend tools (human-in-the-loop), and backend-managed
 history persistence.
 
 ## Architecture
@@ -20,20 +20,20 @@ history persistence.
 │                         │                       │                    │
 │                         ▼                       ▼                    │
 │              POST /api/agent            POST /api/agent              │
-│              {messages, tools}          {messages + toolResult}      │
+│              {new messages, tools}      {toolResult, tools}          │
 └─────────────────────┬───────────────────────────┬───────────────────┘
                       │         AG-UI SSE          │
                       ▼                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         BACKEND (Hono + LangChain)                  │
+│                         BACKEND (Hono + LangGraph)                  │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐    │
 │  │  POST /api/agent                                            │    │
 │  │                                                             │    │
-│  │  1. Accept RunAgentInput (messages, tools, threadId)        │    │
-│  │  2. @ag-ui/langchain LangChainAgent bridges events          │    │
-│  │  3. @ag-ui/encoder encodes events as SSE                    │    │
-│  │  4. Stream: RUN_STARTED -> TEXT_* / TOOL_* -> RUN_FINISHED  │    │
+│  │  1. Accept RunAgentInput (new messages, tools, threadId)    │    │
+│  │  2. Hydrate prior thread messages from backend history      │    │
+│  │  3. Local LangGraph agent runs model/tool/model loop        │    │
+│  │  4. @ag-ui/encoder encodes events as SSE                    │    │
 │  │  5. persistHistory() saves to in-memory KV store            │    │
 │  └─────────────────────────────────────────────────────────────┘    │
 │                                                                     │
@@ -61,21 +61,26 @@ const encoder = new EventEncoder({ accept: req.header("Accept") });
 const encoded = encoder.encode(event); // Returns properly formatted SSE string
 ```
 
-### 2. Using `@ag-ui/langchain` for LangChain Integration
+### 2. Using LangGraph for Tool Orchestration
 
-The `LangChainAgent` class bridges LangChain's streaming output to AG-UI events.
-It handles message conversion, tool call detection, and event emission.
+The backend uses a local LangGraph graph so backend tools execute server-side and
+their results are fed back into the model before the run finishes. Frontend tools are
+bound as model-visible schemas, but the graph stops when one is requested so the UI
+can collect human input before the next run.
 
 ```typescript
-import { LangChainAgent } from "@ag-ui/langchain";
+import { StateGraph, START, END, MessagesAnnotation } from "@langchain/langgraph";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
 
-const agent = new LangChainAgent({
-  chainFn: async ({ messages, tools }) => {
-    return model.bindTools([...backendTools, ...tools]).stream(messages);
-  },
-});
+const toolNode = new ToolNode(backendTools);
 
-const events$ = agent.run(input); // Returns Observable<BaseEvent>
+const graph = new StateGraph(MessagesAnnotation)
+  .addNode("agent", callModel)
+  .addNode("tools", toolNode)
+  .addEdge(START, "agent")
+  .addConditionalEdges("agent", shouldContinue, { tools: "tools", [END]: END })
+  .addEdge("tools", "agent")
+  .compile();
 ```
 
 ### 3. Frontend Tools (Human-in-the-Loop)
@@ -106,7 +111,7 @@ Turn 1: User asks to deploy production server
 
 Turn 2: Frontend sends tool result
   Client -> POST /api/agent
-    { messages: [...history, assistantMsg, toolResultMsg], tools: [...] }
+    { messages: [toolResultMsg], tools: [...] }
   Server -> SSE Events:
     RUN_STARTED
     TEXT_MESSAGE_START / CONTENT ("Great! Deployment approved...")
@@ -116,11 +121,13 @@ Turn 2: Frontend sends tool result
 
 ### 5. Backend-Managed History
 
-The backend automatically persists messages after each agent run:
+The backend hydrates prior messages by `threadId` before each agent run and persists new
+messages after the run:
 
-1. Input messages (user/tool) that are not yet stored are saved
-2. Assistant response is reconstructed from AG-UI events and saved
-3. Frontend only reads (GET) and deletes (DELETE) -- never writes history directly
+1. Stored thread messages are merged with the request's new messages for model context
+2. Input messages (user/tool) that are not yet stored are saved
+3. Assistant response is reconstructed from AG-UI events and saved
+4. Frontend only reads (GET) and deletes (DELETE) -- never writes history directly
 
 ## Event Flow Diagrams
 
@@ -151,6 +158,7 @@ Client                           Server                      LLM
   │<── SSE: TOOL_CALL_START ──────│  [execute get_weather()]   │
   │<── SSE: TOOL_CALL_ARGS ───────│                           │
   │<── SSE: TOOL_CALL_END ────────│── tool_result ────────────>│
+  │<── SSE: TOOL_CALL_RESULT ─────│                           │
   │                                │<── text response ─────────│
   │<── SSE: TEXT_MESSAGE_* ───────│                           │
   │<── SSE: RUN_FINISHED ─────────│                           │
@@ -171,8 +179,8 @@ Client                           Server                      LLM
   │  [Show confirmation UI]        │                           │
   │  [User clicks Approve]         │                           │
   │                                │                           │
-  │─── POST /api/agent ───────────>│── stream(msgs+result) ───>│
-  │    {messages: [..., toolResult]}│<── text response ─────────│
+  │─── POST /api/agent ───────────>│── stream(history+result) ─>│
+  │    {messages: [toolResult]}    │<── text response ─────────│
   │                                │                           │
   │<── SSE: TEXT_MESSAGE_* ───────│                           │
   │<── SSE: RUN_FINISHED ─────────│  [persistHistory()]        │
@@ -183,7 +191,8 @@ Client                           Server                      LLM
 ### Prerequisites
 
 - Node.js 18+
-- An OpenAI API key
+- pnpm 10+
+- An OpenAI or OpenRouter API key
 
 ### Installation
 
@@ -193,23 +202,64 @@ git clone https://github.com/Tsutomu-miku/ag-ui-chat-demo.git
 cd ag-ui-chat-demo
 
 # Install dependencies
-npm install
+pnpm install
 
 # Configure environment
 cp .env.example .env
-# Edit .env and add your OpenAI API key
+# Edit .env and choose OpenAI or OpenRouter
 
 # Start development (both server and client)
-npm run dev
+pnpm dev
 ```
 
 The server runs on `http://localhost:4000` and the client on `http://localhost:5173`.
+The backend loads environment variables from the workspace root `.env` and, optionally,
+from `server/.env`.
+
+### LLM Providers
+
+OpenAI is the default provider:
+
+```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-your-openai-api-key-here
+OPENAI_MODEL=gpt-4o-mini
+```
+
+To use OpenRouter:
+
+```bash
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-your-openrouter-api-key-here
+OPENROUTER_MODEL=openai/gpt-4o-mini
+```
+
+Optional OpenRouter metadata can be set with `OPENROUTER_SITE_URL` and
+`OPENROUTER_APP_NAME`.
 
 ### Running Individually
 
 ```bash
-npm run dev:server  # Backend only (port 4000)
-npm run dev:client  # Frontend only (port 5173, proxies /api to 4000)
+pnpm dev:server  # Backend only (port 4000)
+pnpm dev:client  # Frontend only (port 5173, proxies /api to 4000)
+```
+
+### Backend Logging
+
+Backend logs are ESM-friendly and include a source location such as
+`server/src/http/middleware/requestLogger.ts:61:10`, so most terminals/editors can jump
+back to the calling code. Request logs also include method, path, status, duration, and
+`x-request-id`.
+
+```bash
+LOG_LEVEL=debug   # debug | info | warn | error
+LOG_FORMAT=pretty # pretty | json
+```
+
+Run backend lint/type checks from the workspace root:
+
+```bash
+pnpm run lint
 ```
 
 ## Project Structure
@@ -217,6 +267,8 @@ npm run dev:client  # Frontend only (port 5173, proxies /api to 4000)
 ```
 ag-ui-chat-demo/
 ├── package.json              # Workspace root
+├── pnpm-lock.yaml            # pnpm lockfile
+├── pnpm-workspace.yaml       # pnpm workspace configuration
 ├── .env.example              # Environment template
 ├── .gitignore
 ├── README.md
@@ -224,9 +276,22 @@ ag-ui-chat-demo/
 │   ├── package.json          # Server dependencies (@ag-ui/*, @langchain/*)
 │   ├── tsconfig.json
 │   └── src/
-│       ├── index.ts          # Hono server, AG-UI agent endpoint, history persistence
-│       ├── agent.ts          # LangGraph agent, backend tools (weather, search, calc, time)
-│       └── history.ts        # In-memory KV store, Hono router for history CRUD
+│       ├── index.ts          # Server bootstrap
+│       ├── app.ts            # Hono app, middleware, route mounting
+│       ├── config/
+│       │   └── llm.ts        # OpenAI/OpenRouter provider config
+│       ├── http/
+│       │   └── routes/
+│       │       ├── agent.ts  # AG-UI SSE endpoint
+│       │       ├── health.ts # Health check route
+│       │       └── history.ts # History HTTP routes
+│       └── services/
+│           ├── agent/
+│           │   ├── model.ts  # Chat model factory
+│           │   └── tools.ts  # Backend tools
+│           └── history/
+│               ├── persistence.ts # AG-UI event -> stored message mapping
+│               └── store.ts       # In-memory thread store
 └── client/
     ├── package.json          # Client dependencies (React, @ag-ui/client, @ag-ui/core)
     ├── tsconfig.json
@@ -255,9 +320,9 @@ ag-ui-chat-demo/
 |------------|-----------------------------|--------------------------------------------|  
 | Protocol   | AG-UI                       | Agent-User Interaction protocol (SSE)      |
 | Encoder    | `@ag-ui/encoder`            | SSE event encoding                         |
-| Bridge     | `@ag-ui/langchain`          | LangChain -> AG-UI event conversion        |
-| LLM        | `@langchain/openai`         | OpenAI GPT-4o-mini                         |
-| Agent      | `@langchain/langgraph`      | ReAct agent with tool loop                 |
+| Runtime    | `@langchain/langgraph`       | Model/tool/model orchestration             |
+| LLM        | `@langchain/openai`         | OpenAI or OpenRouter chat models           |
+| Tools      | LangChain tools             | Backend and frontend tool definitions      |
 | Server     | Hono + `@hono/node-server`  | HTTP server with SSE streaming             |
 | Frontend   | React 19 + Vite             | Modern SPA with streaming UI               |
 | Markdown   | `react-markdown` + remark   | Rich message rendering                     |

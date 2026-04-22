@@ -1,12 +1,13 @@
 {
   "name": "ag-ui-chat-demo",
   "private": true,
-  "workspaces": ["server", "client"],
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
-    "dev:server": "npm run dev -w server",
-    "dev:client": "npm run dev -w client",
-    "build": "npm run build -w client"
+    "dev": "concurrently -n server,client -c blue,green \"pnpm --filter ag-ui-chat-server run dev\" \"pnpm --filter ag-ui-chat-client run dev\"",
+    "dev:server": "pnpm --filter ag-ui-chat-server run dev",
+    "dev:client": "pnpm --filter ag-ui-chat-client run dev",
+    "lint": "pnpm --filter ag-ui-chat-server run lint",
+    "build": "pnpm --filter ag-ui-chat-client run build"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

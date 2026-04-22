@@ -72,21 +72,19 @@ export function ChatPanel({
     // Optimistic UI: show user message immediately
     threadActions.addLocalMessage(userMsg);
 
-    // Build full message history for the agent
-    // AG-UI protocol: each request sends the FULL message history
-    const allMessages = [...(thread?.messages || []), userMsg].map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      toolCallId: m.toolCallId,
-      toolCalls: m.toolCalls,
-    }));
-
-    await sendMessage(threadId, allMessages, async () => {
-      // Called when agent run completes (no pending frontend tools)
-      // Refresh from server to get the persisted messages
-      await threadActions.refreshActive();
-    });
+    await sendMessage(
+      threadId,
+      [{
+        id: userMsg.id,
+        role: userMsg.role,
+        content: userMsg.content,
+      }],
+      async () => {
+        // Called when agent run completes (no pending frontend tools)
+        // Refresh from server to get the persisted messages
+        await threadActions.refreshActive();
+      }
+    );
   }, [input, isStreaming, thread, threadActions, sendMessage]);
 
   const handleToolResult = useCallback(

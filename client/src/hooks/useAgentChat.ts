@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { v4 as uuid } from "uuid";
-import type { ChatMessage, FrontendToolDefinition, PendingToolCall, ToolCallFunction } from "../types";
+import type { FrontendToolDefinition, PendingToolCall } from "../types";
 
 // ============================================================
 // Frontend Tool Definitions
@@ -79,7 +79,6 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
   // Track current run context for multi-turn tool calls
   const runContextRef = useRef<{
     threadId: string;
-    messages: any[];
   } | null>(null);
 
   /**
@@ -119,7 +118,7 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
    * Send a message to the AG-UI agent endpoint.
    * 
    * @param threadId - The conversation thread ID
-   * @param messages - Full message history to send (AG-UI is stateless per request)
+   * @param messages - New messages for this run. The backend hydrates thread history.
    * @param onComplete - Called when the run finishes (for refreshing history)
    */
   const sendMessage = useCallback(
@@ -136,8 +135,8 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
       const abortController = new AbortController();
       abortRef.current = abortController;
 
-      // Save context for potential multi-turn tool calls
-      runContextRef.current = { threadId, messages };
+      // Save context for potential multi-turn frontend tool calls
+      runContextRef.current = { threadId };
 
       let fullContent = "";
       let currentMessageId = "";
@@ -271,7 +270,7 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
    * This is the AG-UI multi-turn protocol:
    * 1. First request: agent returns TOOL_CALL events for a frontend tool
    * 2. Frontend shows UI, user interacts
-   * 3. Second request: includes the original messages + assistant message with toolCalls + tool result message
+   * 3. Second request: sends the tool result; the backend hydrates prior messages
    */
   const resolveToolCall = useCallback(
     async (
@@ -290,41 +289,12 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
         toolCallId,
       };
 
-      // Build the assistant message with the tool call (from the previous run)
-      // We need to reconstruct it from pending tool calls
-      const pending = pendingToolCalls.find((p) => p.toolCallId === toolCallId);
-      if (!pending) return;
-
-      const assistantToolCallMessage = {
-        id: uuid(),
-        role: "assistant",
-        content: "",
-        toolCalls: [
-          {
-            id: toolCallId,
-            type: "function",
-            function: {
-              name: pending.toolCallName,
-              arguments: JSON.stringify(pending.args),
-            },
-          },
-        ],
-      };
-
       // Clear pending
       setPendingToolCalls((prev) => prev.filter((p) => p.toolCallId !== toolCallId));
 
-      // New request with full history + tool result
-      const newMessages = [
-        ...ctx.messages,
-        assistantToolCallMessage,
-        toolResultMessage,
-      ];
-
-      // Send the new request
-      await sendMessage(ctx.threadId, newMessages, onComplete);
+      await sendMessage(ctx.threadId, [toolResultMessage], onComplete);
     },
-    [pendingToolCalls, sendMessage]
+    [sendMessage]
   );
 
   const stopStreaming = useCallback(() => {
