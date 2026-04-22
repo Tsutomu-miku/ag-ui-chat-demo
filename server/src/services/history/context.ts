@@ -1,5 +1,9 @@
 import type { Message } from "@ag-ui/core";
 
+import {
+  collectAssistantToolCallIds,
+  isDuplicateAssistantToolCall,
+} from "./message-utils.js";
 import { getOrCreateThread, type StoredMessage } from "./store.js";
 
 function storedMessageToMessage(message: StoredMessage): Message | null {
@@ -29,26 +33,6 @@ function storedMessageToMessage(message: StoredMessage): Message | null {
   }
 }
 
-function collectToolCallIds(message: Message, target: Set<string>) {
-  if (message.role !== "assistant") return;
-
-  for (const toolCall of message.toolCalls || []) {
-    target.add(toolCall.id);
-  }
-}
-
-function isDuplicateAssistantToolCall(message: Message, knownToolCallIds: Set<string>) {
-  if (message.role !== "assistant" || !message.toolCalls?.length) {
-    return false;
-  }
-
-  if (message.content?.trim()) {
-    return false;
-  }
-
-  return message.toolCalls.every((toolCall) => knownToolCallIds.has(toolCall.id));
-}
-
 export function buildMessagesWithHistory(threadId: string, incomingMessages: Message[]) {
   const thread = getOrCreateThread(threadId);
   const messages: Message[] = [];
@@ -61,7 +45,7 @@ export function buildMessagesWithHistory(threadId: string, incomingMessages: Mes
 
     messages.push(message);
     knownMessageIds.add(message.id);
-    collectToolCallIds(message, knownToolCallIds);
+    collectAssistantToolCallIds(message, knownToolCallIds);
   }
 
   for (const message of incomingMessages) {
@@ -70,7 +54,7 @@ export function buildMessagesWithHistory(threadId: string, incomingMessages: Mes
 
     messages.push(message);
     knownMessageIds.add(message.id);
-    collectToolCallIds(message, knownToolCallIds);
+    collectAssistantToolCallIds(message, knownToolCallIds);
   }
 
   return messages;

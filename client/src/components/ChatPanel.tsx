@@ -1,19 +1,50 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { v4 as uuid } from "uuid";
 import { useAgentChat } from "../hooks/useAgentChat";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 import { FrontendToolUI } from "./FrontendToolUI";
-import type { ChatThread, ThreadAgentEvent } from "../types";
+import type { ChatMessage, ChatThread, ThreadAgentEvent } from "../types";
+
+function buildMessageView(messages: ChatMessage[]) {
+  const assistantToolCallIds = new Set(
+    messages.flatMap((message) =>
+      (message.toolCalls || []).map((toolCall) => toolCall.id),
+    ),
+  );
+  const toolResultById = new Map(
+    messages
+      .filter((message) => message.role === "tool" && message.toolCallId)
+      .map((message) => [message.toolCallId as string, message.content]),
+  );
+
+  return {
+    hasMessages: messages.length > 0,
+    hasStreamingMessage: messages.some((message) => message.isStreaming),
+    hasActiveToolCall: messages.some((message) =>
+      message.toolCalls?.some((toolCall) => !toolCall.complete),
+    ),
+    visibleMessages: messages.filter(
+      (message) =>
+        message.role !== "tool" ||
+        !message.toolCallId ||
+        !assistantToolCallIds.has(message.toolCallId),
+    ),
+    toolResultById,
+  };
+}
 
 interface ChatPanelProps {
   thread: ChatThread | null;
   threadActions: {
-    create: () => Promise<string>;
-    refreshActive: (threadId?: string) => Promise<void>;
+    ensureActiveThread: (threadId?: string | null) => Promise<string>;
     refreshList: () => Promise<void>;
-    addLocalMessage: (msg: ChatThread["messages"][0]) => void;
-    applyAgentEvent: (threadId: string, event: ThreadAgentEvent) => void;
+    appendMessage: (msg: ChatThread["messages"][0]) => void;
+    appendToolResult: (
+      threadId: string,
+      toolCallId: string,
+      result: string,
+    ) => void;
+    handleThreadEvent: (threadId: string, event: ThreadAgentEvent) => void;
   };
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
@@ -36,7 +67,7 @@ export function ChatPanel({
     isStreaming,
     pendingToolCalls,
   } = useAgentChat({
-    onThreadEvent: threadActions.applyAgentEvent,
+    onThreadEvent: threadActions.handleThreadEvent,
   });
 
   // Auto-scroll
@@ -57,13 +88,10 @@ export function ChatPanel({
     const text = input.trim();
     if (!text || isStreaming) return;
 
-    let threadId = thread?.id;
-    if (!threadId) {
-      threadId = await threadActions.create();
-    }
+    const threadId = await threadActions.ensureActiveThread(thread?.id);
 
     const userMsg = {
-      id: uuid(),
+      id: crypto.randomUUID(),
       role: "user" as const,
       content: text,
       createdAt: new Date().toISOString(),
@@ -71,8 +99,7 @@ export function ChatPanel({
 
     setInput("");
 
-    // Optimistic UI: show user message immediately
-    threadActions.addLocalMessage(userMsg);
+    threadActions.appendMessage(userMsg);
 
     await sendMessage(
       threadId,
@@ -94,16 +121,7 @@ export function ChatPanel({
     async (toolCallId: string, result: string) => {
       if (!thread?.id) return;
 
-      threadActions.applyAgentEvent(thread.id, {
-        type: "append_message",
-        message: {
-          id: uuid(),
-          role: "tool",
-          content: result,
-          toolCallId,
-          createdAt: new Date().toISOString(),
-        },
-      });
+      threadActions.appendToolResult(thread.id, toolCallId, result);
 
       await resolveToolCall(toolCallId, result, async () => {
         await threadActions.refreshList();
@@ -119,29 +137,14 @@ export function ChatPanel({
     }
   };
 
-  const hasMessages = thread && thread.messages.length > 0;
-  const hasStreamingMessage =
-    thread?.messages.some((msg) => msg.isStreaming) ?? false;
-  const hasActiveToolCall =
-    thread?.messages.some((msg) =>
-      msg.toolCalls?.some((toolCall) => !toolCall.complete),
-    ) ?? false;
-  const toolResultById = new Map<string, string>(
-    (thread?.messages || [])
-      .filter((msg) => msg.role === "tool" && msg.toolCallId)
-      .map((msg) => [msg.toolCallId as string, msg.content]),
-  );
-  const toolCallIds = new Set(
-    (thread?.messages || []).flatMap((msg) =>
-      (msg.toolCalls || []).map((toolCall) => toolCall.id),
-    ),
-  );
-  const visibleMessages = (thread?.messages || []).filter(
-    (msg) =>
-      msg.role !== "tool" ||
-      !msg.toolCallId ||
-      !toolCallIds.has(msg.toolCallId),
-  );
+  const messages = thread?.messages ?? [];
+  const {
+    hasMessages,
+    hasStreamingMessage,
+    hasActiveToolCall,
+    visibleMessages,
+    toolResultById,
+  } = buildMessageView(messages);
 
   return (
     <main className="chat-panel">

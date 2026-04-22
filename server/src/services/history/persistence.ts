@@ -7,6 +7,11 @@ import {
 import { v4 as uuid } from "uuid";
 
 import {
+  collectAssistantToolCallIds,
+  isDuplicateAssistantToolCall,
+  messageContentToString,
+} from "./message-utils.js";
+import {
   appendMessages,
   getOrCreateThread,
   type StoredMessage,
@@ -30,44 +35,6 @@ function isStoredRole(role: Message["role"]): role is StoredRole {
   return role === "user" || role === "assistant" || role === "tool";
 }
 
-function contentToString(content: Message["content"] | undefined): string {
-  if (!content) {
-    return "";
-  }
-
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => (part.type === "text" ? part.text : `[${part.type}]`))
-      .join("\n");
-  }
-
-  return "";
-}
-
-function collectToolCallIds(message: Pick<StoredMessage, "role" | "toolCalls">, target: Set<string>) {
-  if (message.role !== "assistant") return;
-
-  for (const toolCall of message.toolCalls || []) {
-    target.add(toolCall.id);
-  }
-}
-
-function isDuplicateAssistantToolCall(message: Message, knownToolCallIds: Set<string>) {
-  if (message.role !== "assistant" || !message.toolCalls?.length) {
-    return false;
-  }
-
-  if (contentToString(message.content).trim()) {
-    return false;
-  }
-
-  return message.toolCalls.every((toolCall) => knownToolCallIds.has(toolCall.id));
-}
-
 export function persistHistory(
   threadId: string,
   inputMessages: Message[],
@@ -79,7 +46,7 @@ export function persistHistory(
   const newMessages: StoredMessage[] = [];
 
   for (const message of thread.messages) {
-    collectToolCallIds(message, existingToolCallIds);
+    collectAssistantToolCallIds(message, existingToolCallIds);
   }
 
   for (const message of inputMessages) {
@@ -95,7 +62,7 @@ export function persistHistory(
     const newMessage = {
       id: message.id,
       role: message.role,
-      content: contentToString(message.content),
+      content: messageContentToString(message.content),
       toolCallId: message.role === "tool" ? message.toolCallId : undefined,
       toolCalls: message.role === "assistant" ? message.toolCalls : undefined,
       createdAt: new Date().toISOString(),
@@ -103,7 +70,7 @@ export function persistHistory(
 
     newMessages.push(newMessage);
     existingIds.add(message.id);
-    collectToolCallIds(newMessage, existingToolCallIds);
+    collectAssistantToolCallIds(newMessage, existingToolCallIds);
   }
 
   let assistantCharacterCount = 0;
@@ -150,7 +117,7 @@ export function persistHistory(
     ) {
       newMessages.push(assistantMessage);
       existingIds.add(assistantMessage.id);
-      collectToolCallIds(assistantMessage, existingToolCallIds);
+      collectAssistantToolCallIds(assistantMessage, existingToolCallIds);
       assistantCharacterCount += assistantMessage.content.length;
       toolCallCount += assistantMessage.toolCalls?.length || 0;
     }

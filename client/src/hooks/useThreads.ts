@@ -8,6 +8,10 @@ import type {
 
 const API = "/api/history";
 
+function now() {
+  return new Date().toISOString();
+}
+
 async function parseJsonResponse<T>(res: Response): Promise<T | null> {
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`);
@@ -209,12 +213,24 @@ export function useThreads() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [active, setActive] = useState<ChatThread | null>(null);
 
-  // Fetch thread list on mount
-  useEffect(() => {
-    fetchList();
+  const setActiveThread = useCallback((thread: ChatThread | null) => {
+    setActive(thread);
+    setActiveId(thread?.id ?? null);
   }, []);
 
-  const fetchList = useCallback(async () => {
+  const updateActiveThread = useCallback(
+    (updater: (thread: ChatThread) => ChatThread) => {
+      setActive((prev) => (prev ? updater(prev) : prev));
+    },
+    [],
+  );
+
+  // Fetch thread list on mount
+  useEffect(() => {
+    void refreshList();
+  }, []);
+
+  const refreshList = useCallback(async () => {
     try {
       const res = await fetch(`${API}/threads`);
       const data = await parseJsonResponse<ThreadSummary[]>(res);
@@ -225,47 +241,93 @@ export function useThreads() {
     }
   }, []);
 
-  const select = useCallback(async (id: string) => {
-    setActiveId(id);
-    try {
-      const res = await fetch(`${API}/threads/${id}`);
-      const thread = await parseJsonResponse<ChatThread>(res);
-      if (thread) {
-        setActive(thread);
+  const loadThread = useCallback(
+    async (id: string) => {
+      setActiveId(id);
+
+      try {
+        const res = await fetch(`${API}/threads/${id}`);
+        const thread = await parseJsonResponse<ChatThread>(res);
+        if (thread) {
+          setActiveThread(thread);
+        }
+      } catch (e) {
+        console.error("Failed to fetch thread:", e);
       }
-    } catch (e) {
-      console.error("Failed to fetch thread:", e);
-    }
-  }, []);
+    },
+    [setActiveThread],
+  );
+
+  const select = useCallback(
+    async (id: string) => {
+      await loadThread(id);
+    },
+    [loadThread],
+  );
 
   const create = useCallback(async (): Promise<string> => {
-    // Just generate a new threadId - the backend will create the thread
-    // when the first agent request arrives
-    const id = crypto.randomUUID();
-    setActiveId(id);
-    setActive({
-      id,
+    const timestamp = now();
+    const thread = {
+      id: crypto.randomUUID(),
       title: "New Chat",
       messages: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-    return id;
-  }, []);
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
 
-  const applyAgentEvent = useCallback(
+    setActiveThread(thread);
+    return thread.id;
+  }, [setActiveThread]);
+
+  const ensureActiveThread = useCallback(
+    async (threadId?: string | null) => {
+      return threadId || create();
+    },
+    [create],
+  );
+
+  const handleThreadEvent = useCallback(
     (threadId: string, event: ThreadAgentEvent) => {
-      setActive((prev) => {
-        if (!prev || prev.id !== threadId) return prev;
+      updateActiveThread((thread) => {
+        if (thread.id !== threadId) {
+          return thread;
+        }
 
         return {
-          ...prev,
-          messages: updateMessagesWithAgentEvent(prev.messages, event),
-          updatedAt: new Date().toISOString(),
+          ...thread,
+          messages: updateMessagesWithAgentEvent(thread.messages, event),
+          updatedAt: now(),
         };
       });
     },
-    [],
+    [updateActiveThread],
+  );
+
+  const appendMessage = useCallback(
+    (message: ChatThread["messages"][0]) => {
+      updateActiveThread((thread) => ({
+        ...thread,
+        messages: [...thread.messages, message],
+        updatedAt: now(),
+      }));
+    },
+    [updateActiveThread],
+  );
+
+  const appendToolResult = useCallback(
+    (threadId: string, toolCallId: string, result: string) => {
+      handleThreadEvent(threadId, {
+        type: "append_message",
+        message: {
+          id: crypto.randomUUID(),
+          role: "tool",
+          content: result,
+          toolCallId,
+          createdAt: now(),
+        },
+      });
+    },
+    [handleThreadEvent],
   );
 
   const remove = useCallback(
@@ -274,63 +336,26 @@ export function useThreads() {
         await fetch(`${API}/threads/${id}`, { method: "DELETE" });
         setList((prev) => prev.filter((t) => t.id !== id));
         if (activeId === id) {
-          setActiveId(null);
-          setActive(null);
+          setActiveThread(null);
         }
       } catch (e) {
         console.error("Failed to delete thread:", e);
       }
     },
-    [activeId],
+    [activeId, setActiveThread],
   );
-
-  // Refresh active thread from server (after agent run completes)
-  const refreshActive = useCallback(
-    async (threadId = activeId) => {
-      if (!threadId) return;
-      try {
-        const res = await fetch(`${API}/threads/${threadId}`);
-        const thread = await parseJsonResponse<ChatThread>(res);
-        if (thread) {
-          setActive(thread);
-          setActiveId(thread.id);
-        }
-      } catch (e) {
-        console.error("Failed to refresh thread:", e);
-      }
-      // Also refresh the list
-      fetchList();
-    },
-    [activeId, fetchList],
-  );
-
-  // Optimistic update: add a message locally (for immediate UI feedback)
-  const addLocalMessage = useCallback((message: ChatThread["messages"][0]) => {
-    setActive((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        messages: [...prev.messages, message],
-        updatedAt: new Date().toISOString(),
-      };
-    });
-  }, []);
-
-  const refreshList = useCallback(async () => {
-    await fetchList();
-  }, [fetchList]);
 
   return {
     list,
     active,
     activeId,
     create,
+    ensureActiveThread,
     select,
     remove,
-    refreshActive,
     refreshList,
-    addLocalMessage,
-    applyAgentEvent,
-    fetchList,
+    appendMessage,
+    appendToolResult,
+    handleThreadEvent,
   };
 }
