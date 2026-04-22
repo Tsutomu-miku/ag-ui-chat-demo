@@ -1,45 +1,56 @@
-import React from "react";
-
 interface ToolCall {
   id: string;
   name: string;
   args: string;
+  complete: boolean;
 }
 
-interface ToolCallDisplayProps {
+interface Props {
   toolCalls: ToolCall[];
   isStreaming?: boolean;
 }
 
-export function ToolCallDisplay({
-  toolCalls,
-  isStreaming,
-}: ToolCallDisplayProps) {
+// Map tool names to labels
+const TOOL_LABELS: Record<string, { icon: string; label: string; type: string }> = {
+  get_weather: { icon: "🌤", label: "Weather Lookup", type: "backend" },
+  search_web: { icon: "🔍", label: "Web Search", type: "backend" },
+  calculate: { icon: "🧮", label: "Calculator", type: "backend" },
+  get_current_time: { icon: "🕐", label: "Current Time", type: "backend" },
+  confirm_action: { icon: "✅", label: "Confirm Action", type: "frontend" },
+  collect_user_input: { icon: "📝", label: "User Input", type: "frontend" },
+};
+
+export function ToolCallDisplay({ toolCalls, isStreaming }: Props) {
   return (
     <div className="tool-calls">
-      {toolCalls.map((tc) => (
-        <div
-          key={tc.id}
-          className={`tool-call ${isStreaming ? "streaming" : ""}`}
-        >
-          <div className="tool-call-header">
-            <span className="tool-icon">\u{1F527}</span>
-            <span className="tool-name">{tc.name}</span>
-            {isStreaming && <span className="tool-spinner">\u23F3</span>}
+      {toolCalls.map((tc) => {
+        const info = TOOL_LABELS[tc.name] || { icon: "🔧", label: tc.name, type: "unknown" };
+        return (
+          <div
+            key={tc.id}
+            className={`tool-call ${isStreaming && !tc.complete ? "streaming" : ""} ${info.type}`}
+          >
+            <div className="tool-call-header">
+              <span className="tool-icon">{info.icon}</span>
+              <span className="tool-name">{info.label}</span>
+              <span className={`tool-type-badge ${info.type}`}>{info.type}</span>
+              {isStreaming && !tc.complete && <span className="tool-spinner" />}
+              {tc.complete && <span className="tool-check">✓</span>}
+            </div>
+            {tc.args && (
+              <pre className="tool-args">{formatJSON(tc.args)}</pre>
+            )}
           </div>
-          {tc.args && (
-            <pre className="tool-args">{tryFormatJSON(tc.args)}</pre>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-function tryFormatJSON(str: string): string {
+function formatJSON(s: string): string {
   try {
-    return JSON.stringify(JSON.parse(str), null, 2);
+    return JSON.stringify(JSON.parse(s), null, 2);
   } catch {
-    return str;
+    return s;
   }
 }

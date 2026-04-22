@@ -1,36 +1,150 @@
 import { useState, useCallback, useRef } from "react";
 import { v4 as uuid } from "uuid";
-import type { ChatMessage } from "./useThreads";
+import type { ChatMessage, FrontendToolDefinition, PendingToolCall, ToolCallFunction } from "../types";
+
+// ============================================================
+// Frontend Tool Definitions
+//
+// These tools require user interaction before execution.
+// The agent sees them and can call them. When it does,
+// the frontend shows a UI for the user to interact with.
+// ============================================================
+
+export const FRONTEND_TOOLS: FrontendToolDefinition[] = [
+  {
+    name: "confirm_action",
+    description: "Ask the user to confirm or reject a proposed action before proceeding. Use this when you are about to perform something important or irreversible.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description: "Description of the action to confirm",
+        },
+        severity: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+          description: "How critical this action is",
+        },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "collect_user_input",
+    description: "Ask the user to provide additional information via a text input. Use when you need more details to complete a task.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "The question or prompt to show the user",
+        },
+        placeholder: {
+          type: "string",
+          description: "Placeholder text for the input field",
+        },
+      },
+      required: ["prompt"],
+    },
+  },
+];
+
+// ============================================================
+// AG-UI Event Types (for SSE parsing)
+// ============================================================
+
+interface AGUIEvent {
+  type: string;
+  [key: string]: any;
+}
+
+// ============================================================
+// Hook
+// ============================================================
 
 interface UseAgentChatOptions {
   agentUrl?: string;
 }
 
-export function useAgentChat(
-  { agentUrl = "/api/agent" }: UseAgentChatOptions = {}
-) {
+export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingToolCalls, setStreamingToolCalls] = useState<
-    Array<{ id: string; name: string; args: string }>
+    Array<{ id: string; name: string; args: string; complete: boolean }>
   >([]);
-  const abortRef = useRef<(() => void) | null>(null);
+  const [pendingToolCalls, setPendingToolCalls] = useState<PendingToolCall[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
 
+  // Track current run context for multi-turn tool calls
+  const runContextRef = useRef<{
+    threadId: string;
+    messages: any[];
+  } | null>(null);
+
+  /**
+   * Parse AG-UI SSE stream from the server.
+   * Uses @ag-ui/encoder format: each line is `data: {JSON}\n\n`
+   */
+  const parseSSEStream = async function* (
+    response: Response
+  ): AsyncGenerator<AGUIEvent> {
+    const reader = response.body?.getReader();
+    if (!reader) return;
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (!trimmed.startsWith("data: ")) continue;
+        try {
+          yield JSON.parse(trimmed.slice(6));
+        } catch {
+          // skip malformed events
+        }
+      }
+    }
+  };
+
+  /**
+   * Send a message to the AG-UI agent endpoint.
+   * 
+   * @param threadId - The conversation thread ID
+   * @param messages - Full message history to send (AG-UI is stateless per request)
+   * @param onComplete - Called when the run finishes (for refreshing history)
+   */
   const sendMessage = useCallback(
     async (
       threadId: string,
-      messages: Array<{ role: string; content: string; id?: string }>,
-      onComplete: (message: ChatMessage) => void
+      messages: any[],
+      onComplete: () => Promise<void>
     ) => {
       setIsStreaming(true);
       setStreamingContent("");
       setStreamingToolCalls([]);
+      setPendingToolCalls([]);
 
-      const runId = uuid();
+      const abortController = new AbortController();
+      abortRef.current = abortController;
+
+      // Save context for potential multi-turn tool calls
+      runContextRef.current = { threadId, messages };
+
       let fullContent = "";
-      let messageId = "";
-      const toolCalls: Array<{ id: string; name: string; args: string }> = [];
+      let currentMessageId = "";
+      const toolCalls: Array<{ id: string; name: string; args: string; complete: boolean }> = [];
       const toolCallArgsMap = new Map<string, string>();
+      const frontendToolNames = new Set(FRONTEND_TOOLS.map((t) => t.name));
+      const pendingFrontend: PendingToolCall[] = [];
 
       try {
         const response = await fetch(agentUrl, {
@@ -41,121 +155,105 @@ export function useAgentChat(
           },
           body: JSON.stringify({
             threadId,
-            runId,
-            messages: messages.map((m) => ({
-              id: m.id || uuid(),
-              role: m.role,
-              content: m.content,
-            })),
-            tools: [],
+            runId: uuid(),
+            messages,
+            // Pass frontend tool definitions to the agent
+            tools: FRONTEND_TOOLS,
             context: [],
+            forwardedProps: {},
+            state: undefined,
           }),
+          signal: abortController.signal,
         });
 
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          throw new Error(`Server error: ${response.status} ${response.statusText}`);
         }
 
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error("No response body");
+        // Process AG-UI events from SSE stream
+        for await (const event of parseSSEStream(response)) {
+          switch (event.type) {
+            case "RUN_STARTED":
+              break;
 
-        const decoder = new TextDecoder();
-        let buffer = "";
+            case "TEXT_MESSAGE_START":
+              currentMessageId = event.messageId || uuid();
+              break;
 
-        abortRef.current = () => reader.cancel();
+            case "TEXT_MESSAGE_CONTENT":
+              fullContent += event.delta || "";
+              setStreamingContent(fullContent);
+              break;
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+            case "TEXT_MESSAGE_END":
+              break;
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            const dataLine = line.trim();
-            if (!dataLine.startsWith("data: ")) continue;
-
-            try {
-              const event = JSON.parse(dataLine.slice(6)) as Record<
-                string,
-                any
-              >;
-
-              switch (event.type) {
-                case "RUN_STARTED":
-                  break;
-
-                case "TEXT_MESSAGE_START":
-                  messageId = event.messageId || uuid();
-                  break;
-
-                case "TEXT_MESSAGE_CONTENT":
-                  fullContent += event.delta || "";
-                  setStreamingContent(fullContent);
-                  break;
-
-                case "TEXT_MESSAGE_END":
-                  break;
-
-                case "TOOL_CALL_START":
-                  toolCalls.push({
-                    id: event.toolCallId,
-                    name: event.toolCallName,
-                    args: "",
-                  });
-                  toolCallArgsMap.set(event.toolCallId, "");
-                  setStreamingToolCalls([...toolCalls]);
-                  break;
-
-                case "TOOL_CALL_ARGS": {
-                  const existing =
-                    toolCallArgsMap.get(event.toolCallId) || "";
-                  const updated = existing + (event.delta || "");
-                  toolCallArgsMap.set(event.toolCallId, updated);
-                  const tcIdx = toolCalls.findIndex(
-                    (tc) => tc.id === event.toolCallId
-                  );
-                  if (tcIdx >= 0) toolCalls[tcIdx].args = updated;
-                  setStreamingToolCalls([...toolCalls]);
-                  break;
-                }
-
-                case "TOOL_CALL_END":
-                  break;
-
-                case "RUN_FINISHED":
-                  break;
-
-                case "RUN_ERROR":
-                  throw new Error(event.message || "Agent run failed");
-              }
-            } catch (e) {
-              if (e instanceof SyntaxError) continue;
-              throw e;
+            case "TOOL_CALL_START": {
+              const tc = {
+                id: event.toolCallId,
+                name: event.toolCallName,
+                args: "",
+                complete: false,
+              };
+              toolCalls.push(tc);
+              toolCallArgsMap.set(event.toolCallId, "");
+              setStreamingToolCalls([...toolCalls]);
+              break;
             }
+
+            case "TOOL_CALL_ARGS": {
+              const prev = toolCallArgsMap.get(event.toolCallId) || "";
+              const updated = prev + (event.delta || "");
+              toolCallArgsMap.set(event.toolCallId, updated);
+              const idx = toolCalls.findIndex((t) => t.id === event.toolCallId);
+              if (idx >= 0) toolCalls[idx].args = updated;
+              setStreamingToolCalls([...toolCalls]);
+              break;
+            }
+
+            case "TOOL_CALL_END": {
+              const idx = toolCalls.findIndex((t) => t.id === event.toolCallId);
+              if (idx >= 0) {
+                toolCalls[idx].complete = true;
+                setStreamingToolCalls([...toolCalls]);
+
+                // Check if this is a frontend tool call
+                if (frontendToolNames.has(toolCalls[idx].name)) {
+                  let parsedArgs = {};
+                  try {
+                    parsedArgs = JSON.parse(toolCalls[idx].args);
+                  } catch {}
+                  pendingFrontend.push({
+                    toolCallId: toolCalls[idx].id,
+                    toolCallName: toolCalls[idx].name,
+                    args: parsedArgs,
+                    status: "pending",
+                  });
+                }
+              }
+              break;
+            }
+
+            case "RUN_FINISHED":
+              break;
+
+            case "RUN_ERROR":
+              throw new Error(event.message || "Agent run failed");
           }
         }
 
-        // Build the final assistant message
-        const finalMessage: ChatMessage = {
-          id: messageId || uuid(),
-          role: "assistant",
-          content: fullContent,
-          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-          createdAt: new Date().toISOString(),
-        };
-
-        onComplete(finalMessage);
+        // If there are pending frontend tool calls, set them for the UI
+        if (pendingFrontend.length > 0) {
+          setPendingToolCalls(pendingFrontend);
+          // Don't call onComplete yet - wait for tool resolution
+        } else {
+          // No frontend tool calls - run is fully complete
+          await onComplete();
+        }
       } catch (error: any) {
-        console.error("AG-UI stream error:", error);
-        const errorMessage: ChatMessage = {
-          id: uuid(),
-          role: "assistant",
-          content: `Error: ${error.message}`,
-          createdAt: new Date().toISOString(),
-        };
-        onComplete(errorMessage);
+        if (error.name !== "AbortError") {
+          console.error("[AG-UI] Stream error:", error);
+        }
       } finally {
         setIsStreaming(false);
         setStreamingContent("");
@@ -166,15 +264,80 @@ export function useAgentChat(
     [agentUrl]
   );
 
+  /**
+   * Resolve a frontend tool call (user has approved/rejected/provided input).
+   * Sends a NEW request to the agent with the tool result in messages.
+   *
+   * This is the AG-UI multi-turn protocol:
+   * 1. First request: agent returns TOOL_CALL events for a frontend tool
+   * 2. Frontend shows UI, user interacts
+   * 3. Second request: includes the original messages + assistant message with toolCalls + tool result message
+   */
+  const resolveToolCall = useCallback(
+    async (
+      toolCallId: string,
+      result: string,
+      onComplete: () => Promise<void>
+    ) => {
+      const ctx = runContextRef.current;
+      if (!ctx) return;
+
+      // Build the tool result message
+      const toolResultMessage = {
+        id: uuid(),
+        role: "tool",
+        content: result,
+        toolCallId,
+      };
+
+      // Build the assistant message with the tool call (from the previous run)
+      // We need to reconstruct it from pending tool calls
+      const pending = pendingToolCalls.find((p) => p.toolCallId === toolCallId);
+      if (!pending) return;
+
+      const assistantToolCallMessage = {
+        id: uuid(),
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: toolCallId,
+            type: "function",
+            function: {
+              name: pending.toolCallName,
+              arguments: JSON.stringify(pending.args),
+            },
+          },
+        ],
+      };
+
+      // Clear pending
+      setPendingToolCalls((prev) => prev.filter((p) => p.toolCallId !== toolCallId));
+
+      // New request with full history + tool result
+      const newMessages = [
+        ...ctx.messages,
+        assistantToolCallMessage,
+        toolResultMessage,
+      ];
+
+      // Send the new request
+      await sendMessage(ctx.threadId, newMessages, onComplete);
+    },
+    [pendingToolCalls, sendMessage]
+  );
+
   const stopStreaming = useCallback(() => {
-    abortRef.current?.();
+    abortRef.current?.abort();
   }, []);
 
   return {
     sendMessage,
     stopStreaming,
+    resolveToolCall,
     isStreaming,
     streamingContent,
     streamingToolCalls,
+    pendingToolCalls,
   };
 }

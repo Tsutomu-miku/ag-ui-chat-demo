@@ -3,224 +3,233 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
-import { createAgent } from "./agent.js";
-import { historyRouter } from "./history.js";
-import { v4 as uuid } from "uuid";
+import { EventEncoder } from "@ag-ui/encoder";
+import { LangChainAgent } from "@ag-ui/langchain";
+import { EventType } from "@ag-ui/core";
+import type { RunAgentInput, BaseEvent } from "@ag-ui/core";
+import { createAgentModel, backendTools } from "./agent.js";
 import {
-  HumanMessage,
-  AIMessage,
-  SystemMessage,
-  ToolMessage,
-} from "@langchain/core/messages";
+  historyRouter,
+  getOrCreateThread,
+  appendMessages,
+  type StoredMessage,
+} from "./history.js";
+import { v4 as uuid } from "uuid";
 
 const app = new Hono();
+
+// ============================================================
+// Middleware
+// ============================================================
 
 app.use(
   "/*",
   cors({
     origin: "*",
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Accept"],
+    allowHeaders: ["*"],
   })
 );
 
+// ============================================================
 // Health check
-app.get("/api/health", (c) => c.json({ status: "ok" }));
+// ============================================================
 
-// History API
+app.get("/api/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+
+// ============================================================
+// History API (read/delete only - writing is done by the agent endpoint)
+// ============================================================
+
 app.route("/api/history", historyRouter);
 
-// AG-UI Protocol endpoint
-// Accepts POST with messages array, returns SSE stream of AG-UI events
+// ============================================================
+// AG-UI Agent Endpoint
+//
+// This is the core of the AG-UI best practice:
+// 1. Accept RunAgentInput (POST with messages, tools, threadId, etc.)
+// 2. Use @ag-ui/langchain's LangChainAgent to bridge LangChain -> AG-UI events
+// 3. Use @ag-ui/encoder to encode events as SSE
+// 4. Stream events back to the client
+// 5. After run completes, persist messages to history
+//
+// Frontend tools flow:
+// - Client sends tools[] in RunAgentInput
+// - @ag-ui/langchain converts them to LangChain DynamicStructuredTools (with no-op func)
+// - When the LLM calls a frontend tool, TOOL_CALL_* events are emitted
+// - The run finishes (RUN_FINISHED)
+// - Client executes the tool locally (e.g., shows a confirmation dialog)
+// - Client sends a NEW request with the tool result as a ToolMessage in messages[]
+// - The agent continues processing with the tool result
+// ============================================================
+
 app.post("/api/agent", async (c) => {
-  const body = await c.req.json();
-  const { threadId, runId, messages } = body;
+  const input: RunAgentInput = await c.req.json();
+  const encoder = new EventEncoder({ accept: c.req.header("Accept") || undefined });
 
-  const currentThreadId = threadId || uuid();
-  const currentRunId = runId || uuid();
+  // Ensure thread exists
+  getOrCreateThread(input.threadId);
 
-  // Convert incoming messages to LangChain format
-  const langchainMessages = (messages || []).map((msg: any) => {
-    switch (msg.role) {
-      case "user":
-        return new HumanMessage(msg.content);
-      case "assistant":
-        return new AIMessage(msg.content);
-      case "system":
-        return new SystemMessage(msg.content);
-      case "tool":
-        return new ToolMessage({
-          content: msg.content,
-          tool_call_id: msg.toolCallId || "",
-        });
-      default:
-        return new HumanMessage(msg.content);
-    }
+  // ----- Build the LangChainAgent -----
+  // Using chainFn pattern for full control:
+  // - We use createReactAgent from LangGraph for BACKEND tools
+  // - @ag-ui/langchain automatically handles FRONTEND tools (from input.tools)
+  //   by converting them to LangChain tools with no-op func
+  const agent = new LangChainAgent({
+    chainFn: async ({ messages, tools, threadId, runId }) => {
+      const model = createAgentModel();
+
+      // Merge backend tools + frontend tools (passed via AG-UI protocol)
+      // Backend tools have real implementations; frontend tools have no-op func
+      const allTools = [...backendTools, ...tools];
+
+      // Bind all tools to the model and stream
+      return model.bindTools(allTools).stream(messages);
+    },
   });
 
-  if (langchainMessages.length === 0) {
-    return c.json({ error: "No messages provided" }, 400);
-  }
+  // ----- Collect events for history persistence -----
+  const collectedEvents: (BaseEvent & Record<string, any>)[] = [];
 
-  const agent = createAgent();
+  // ----- Stream SSE response -----
+  const contentType = encoder.getContentType();
+
+  const events$ = agent.run(input);
 
   return streamSSE(c, async (stream) => {
-    try {
-      // RUN_STARTED
-      await stream.writeSSE({
-        data: JSON.stringify({
-          type: "RUN_STARTED",
-          threadId: currentThreadId,
-          runId: currentRunId,
-        }),
+    await new Promise<void>((resolve, reject) => {
+      const subscription = events$.subscribe({
+        next: (event) => {
+          collectedEvents.push(event as any);
+          // Use @ag-ui/encoder to properly encode the event
+          const encoded = encoder.encode(event);
+          // streamSSE expects writeSSE with data field, but we need raw SSE
+          // So we write the raw encoded string directly
+          stream.write(encoded);
+        },
+        error: (err) => {
+          console.error("[AG-UI] Stream error:", err);
+          const errorEvent = {
+            type: EventType.RUN_ERROR,
+            message: err instanceof Error ? err.message : String(err),
+          };
+          stream.write(encoder.encode(errorEvent as any));
+          // Still try to save what we have
+          persistHistory(input.threadId, input.messages, collectedEvents);
+          resolve();
+        },
+        complete: () => {
+          // ----- Persist history after run completes -----
+          persistHistory(input.threadId, input.messages, collectedEvents);
+          resolve();
+        },
       });
 
-      const messageId = uuid();
-      let hasStartedMessage = false;
-      const currentToolCalls: Map<string, boolean> = new Map();
-
-      // Stream the agent response using LangGraph's message-level streaming
-      const agentStream = await agent.stream(
-        { messages: langchainMessages },
-        { streamMode: "messages" }
-      );
-
-      for await (const [message, _metadata] of agentStream) {
-        // Handle AI message chunks (text content streaming)
-        if (message._getType() === "ai") {
-          const aiMsg = message as any;
-
-          // Handle streamed text content
-          if (
-            aiMsg.content &&
-            typeof aiMsg.content === "string" &&
-            aiMsg.content.length > 0
-          ) {
-            if (!hasStartedMessage) {
-              hasStartedMessage = true;
-              await stream.writeSSE({
-                data: JSON.stringify({
-                  type: "TEXT_MESSAGE_START",
-                  messageId,
-                  role: "assistant",
-                }),
-              });
-            }
-
-            await stream.writeSSE({
-              data: JSON.stringify({
-                type: "TEXT_MESSAGE_CONTENT",
-                messageId,
-                delta: aiMsg.content,
-              }),
-            });
-          }
-
-          // Handle tool call chunks
-          if (aiMsg.tool_call_chunks && aiMsg.tool_call_chunks.length > 0) {
-            for (const toolCallChunk of aiMsg.tool_call_chunks) {
-              const toolCallId =
-                toolCallChunk.id || `tool_${toolCallChunk.index}`;
-
-              if (toolCallChunk.name && !currentToolCalls.has(toolCallId)) {
-                // Close any open text message before tool calls
-                if (hasStartedMessage) {
-                  await stream.writeSSE({
-                    data: JSON.stringify({
-                      type: "TEXT_MESSAGE_END",
-                      messageId,
-                    }),
-                  });
-                  hasStartedMessage = false;
-                }
-
-                currentToolCalls.set(toolCallId, true);
-                await stream.writeSSE({
-                  data: JSON.stringify({
-                    type: "TOOL_CALL_START",
-                    toolCallId,
-                    toolCallName: toolCallChunk.name,
-                  }),
-                });
-              }
-
-              if (toolCallChunk.args) {
-                await stream.writeSSE({
-                  data: JSON.stringify({
-                    type: "TOOL_CALL_ARGS",
-                    toolCallId,
-                    delta: toolCallChunk.args,
-                  }),
-                });
-              }
-            }
-          }
-        }
-
-        // Handle tool result messages
-        if (message._getType() === "tool") {
-          const toolMsg = message as any;
-          const toolCallId = toolMsg.tool_call_id;
-
-          if (currentToolCalls.has(toolCallId)) {
-            await stream.writeSSE({
-              data: JSON.stringify({
-                type: "TOOL_CALL_END",
-                toolCallId,
-              }),
-            });
-            currentToolCalls.delete(toolCallId);
-          }
-        }
-      }
-
-      // Close any remaining open text message
-      if (hasStartedMessage) {
-        await stream.writeSSE({
-          data: JSON.stringify({
-            type: "TEXT_MESSAGE_END",
-            messageId,
-          }),
-        });
-      }
-
-      // Close any remaining open tool calls
-      for (const [toolCallId] of currentToolCalls) {
-        await stream.writeSSE({
-          data: JSON.stringify({
-            type: "TOOL_CALL_END",
-            toolCallId,
-          }),
-        });
-      }
-
-      // RUN_FINISHED
-      await stream.writeSSE({
-        data: JSON.stringify({
-          type: "RUN_FINISHED",
-          threadId: currentThreadId,
-          runId: currentRunId,
-        }),
+      stream.onAbort(() => {
+        subscription.unsubscribe();
+        resolve();
       });
-    } catch (error: any) {
-      console.error("Agent error:", error);
-      await stream.writeSSE({
-        data: JSON.stringify({
-          type: "RUN_ERROR",
-          message: error.message || "Unknown error",
-        }),
-      });
-    }
+    });
   });
 });
 
+// ============================================================
+// History Persistence Logic
+//
+// After each agent run, we reconstruct the assistant's response
+// from the collected AG-UI events and save it to the thread.
+// We also save any NEW user/tool messages that aren't already stored.
+// ============================================================
+
+function persistHistory(
+  threadId: string,
+  inputMessages: any[],
+  events: (BaseEvent & Record<string, any>)[]
+) {
+  const thread = getOrCreateThread(threadId);
+  const existingIds = new Set(thread.messages.map((m) => m.id));
+  const newMessages: StoredMessage[] = [];
+
+  // 1. Save input messages that are not yet in the thread
+  //    (user messages and tool result messages from the client)
+  for (const msg of inputMessages) {
+    if (msg.id && !existingIds.has(msg.id)) {
+      newMessages.push({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content || "",
+        toolCallId: msg.toolCallId,
+        toolCalls: msg.toolCalls,
+        createdAt: new Date().toISOString(),
+      });
+      existingIds.add(msg.id);
+    }
+  }
+
+  // 2. Reconstruct assistant message from AG-UI events
+  let assistantContent = "";
+  let currentMessageId = "";
+  const toolCalls: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }> = [];
+  const toolCallArgs = new Map<string, string>();
+
+  for (const event of events) {
+    switch (event.type) {
+      case EventType.TEXT_MESSAGE_START:
+      case "TEXT_MESSAGE_START":
+        currentMessageId = event.messageId || uuid();
+        break;
+      case EventType.TEXT_MESSAGE_CONTENT:
+      case "TEXT_MESSAGE_CONTENT":
+        assistantContent += event.delta || "";
+        break;
+      case EventType.TOOL_CALL_START:
+      case "TOOL_CALL_START":
+        toolCalls.push({
+          id: event.toolCallId,
+          type: "function",
+          function: { name: event.toolCallName, arguments: "" },
+        });
+        toolCallArgs.set(event.toolCallId, "");
+        break;
+      case EventType.TOOL_CALL_ARGS:
+      case "TOOL_CALL_ARGS":
+        const prev = toolCallArgs.get(event.toolCallId) || "";
+        const updated = prev + (event.delta || "");
+        toolCallArgs.set(event.toolCallId, updated);
+        const tc = toolCalls.find((t) => t.id === event.toolCallId);
+        if (tc) tc.function.arguments = updated;
+        break;
+    }
+  }
+
+  // Only save if there's actual content or tool calls
+  if (assistantContent || toolCalls.length > 0) {
+    newMessages.push({
+      id: currentMessageId || uuid(),
+      role: "assistant",
+      content: assistantContent,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  if (newMessages.length > 0) {
+    appendMessages(threadId, newMessages);
+  }
+}
+
+// ============================================================
+// Start Server
+// ============================================================
+
 const port = Number(process.env.PORT || 4000);
 serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`AG-UI Server running at http://localhost:${info.port}`);
-  console.log(
-    `  AG-UI endpoint: POST http://localhost:${info.port}/api/agent`
-  );
-  console.log(
-    `  History API:    http://localhost:${info.port}/api/history/threads`
-  );
+  console.log(`\n🚀 AG-UI Chat Server running at http://localhost:${info.port}`);
+  console.log(`   ├─ AG-UI Agent:  POST http://localhost:${info.port}/api/agent`);
+  console.log(`   ├─ History API:  GET  http://localhost:${info.port}/api/history/threads`);
+  console.log(`   └─ Health:       GET  http://localhost:${info.port}/api/health\n`);
 });
