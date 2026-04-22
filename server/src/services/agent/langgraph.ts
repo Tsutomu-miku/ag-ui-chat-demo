@@ -98,14 +98,15 @@ const SUB_AGENT_CONFIGS: Record<string, SubAgentConfig> = {
 /**
  * Run a sub-agent loop.
  * Yields AG-UI events wrapped in STEP_STARTED / STEP_FINISHED.
+ * Returns the accumulated text output for the caller to feed back into context.
  */
 async function* runSubAgent(
   agentName: string,
   parentMessages: BaseMessage[],
   signal?: AbortSignal,
-): AsyncGenerator<BaseEvent> {
+): AsyncGenerator<BaseEvent, string> {
   const config = SUB_AGENT_CONFIGS[agentName];
-  if (!config) return;
+  if (!config) return "";
 
   const metadata: StreamEventMetadata = {
     stepName: agentName,
@@ -128,6 +129,8 @@ async function* runSubAgent(
     ...parentMessages,
   ];
 
+  let textOutput = "";
+
   while (!signal?.aborted) {
     const stream = await model.stream(subMessages, { signal });
     const finalChunk = yield* eventsFromAIMessageStream(stream, metadata);
@@ -136,6 +139,10 @@ async function* runSubAgent(
 
     const finalMessage = toAIMessage(finalChunk);
     subMessages.push(finalMessage);
+
+    // Capture text content for returning to caller
+    const text = contentToString(finalMessage.content);
+    if (text) textOutput += text;
 
     const toolCalls = getToolCalls(finalMessage);
     if (toolCalls.length === 0) break;
@@ -155,6 +162,8 @@ async function* runSubAgent(
     { type: EventType.STEP_FINISHED, stepName: agentName } as BaseEvent,
     metadata,
   );
+
+  return textOutput;
 }
 
 // ============================================================
@@ -174,6 +183,8 @@ Your workflow:
 4. For complex tasks, delegate to "researcher" first, then "writer" to synthesise.
 5. For simple greetings or trivial chat, respond directly WITHOUT delegating.
 6. After a sub-agent finishes, review the conversation and either delegate to another sub-agent, use backend/frontend tools directly, or respond to the user.
+
+IMPORTANT: Issue only ONE delegate_to_subagent call per turn. Do NOT combine delegation with other tool calls in the same response.
 
 You also have direct access to all backend and frontend tools. Use them directly for simple, single-step tasks instead of delegating.`;
 
@@ -240,33 +251,29 @@ export async function* runLangGraphAgent(
     frontendToolCount: frontendTools.length,
   });
 
+  // ── Supervisor STEP wraps the entire run (single start/finish) ──
+  const supervisorMetadata: StreamEventMetadata = { stepName: "supervisor" };
+
+  yield withStreamEventMetadata(
+    {
+      type: EventType.STEP_STARTED,
+      stepName: "supervisor",
+    } as BaseEvent,
+    supervisorMetadata,
+  );
+
+  // Accumulate sub-agent results so later sub-agents can see earlier ones
+  const subAgentResults: { agent: string; output: string }[] = [];
+
   // Supervisor loop — max iterations to prevent runaway
   const MAX_SUPERVISOR_ITERATIONS = 10;
 
   for (let i = 0; i < MAX_SUPERVISOR_ITERATIONS && !signal?.aborted; i++) {
-    const supervisorMetadata: StreamEventMetadata = { stepName: "supervisor" };
-
-    yield withStreamEventMetadata(
-      {
-        type: EventType.STEP_STARTED,
-        stepName: "supervisor",
-      } as BaseEvent,
-      supervisorMetadata,
-    );
-
     const aiResponseStream = await supervisorModel.stream(stateMessages, {
       signal,
     });
     const finalChunk = yield* eventsFromAIMessageStream(
       aiResponseStream,
-      supervisorMetadata,
-    );
-
-    yield withStreamEventMetadata(
-      {
-        type: EventType.STEP_FINISHED,
-        stepName: "supervisor",
-      } as BaseEvent,
       supervisorMetadata,
     );
 
@@ -283,79 +290,115 @@ export async function* runLangGraphAgent(
       break;
     }
 
-    // Check for sub-agent delegation
-    const delegateCall = toolCalls.find(
+    // Separate delegation calls from regular tool calls
+    const delegateCalls = toolCalls.filter(
       (tc) => tc.name === "delegate_to_subagent",
     );
+    const regularCalls = toolCalls.filter(
+      (tc) => tc.name !== "delegate_to_subagent",
+    );
 
-    if (delegateCall) {
+    // Handle all delegation calls
+    for (const delegateCall of delegateCalls) {
       const agentName = String(delegateCall.args?.agent || "");
       const instruction = delegateCall.args?.instruction
         ? String(delegateCall.args.instruction)
         : undefined;
 
-      // Acknowledge the delegation tool call with a synthetic result
+      if (!SUB_AGENT_NAMES.has(agentName)) {
+        // Unknown agent — feed error back to supervisor
+        const errorMessage = new ToolMessage({
+          content: `Error: Unknown sub-agent "${agentName}". Available agents: ${[...SUB_AGENT_NAMES].join(", ")}`,
+          tool_call_id: delegateCall.id || uuid(),
+        });
+        stateMessages.push(errorMessage);
+        yield* eventsFromToolMessage(errorMessage, supervisorMetadata);
+        continue;
+      }
+
+      // Acknowledge the delegation tool call
       const delegateResultMessage = new ToolMessage({
         content: `Delegating to ${agentName}...`,
         tool_call_id: delegateCall.id || uuid(),
       });
       stateMessages.push(delegateResultMessage);
 
-      if (SUB_AGENT_NAMES.has(agentName)) {
-        // Build context for the sub-agent: the user-facing messages (skip system)
-        const subAgentContext = instruction
-          ? [
-              ...messages,
-              new SystemMessage(
-                `Additional instruction from supervisor: ${instruction}`,
-              ),
-            ]
-          : [...messages];
+      // Build context for the sub-agent:
+      // user messages + previous sub-agent results + optional instruction
+      const subAgentContext: BaseMessage[] = [...messages];
 
-        // Run sub-agent and yield its events
-        let subAgentOutput = "";
-        for await (const event of runSubAgent(
-          agentName,
-          subAgentContext,
-          signal,
-        )) {
-          // Capture text content from sub-agent for supervisor context
-          if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
-            const delta = (event as BaseEvent & { delta?: string }).delta || "";
-            subAgentOutput += delta;
-          }
-          yield event;
-        }
-
-        // Feed sub-agent result back to supervisor as context
-        if (subAgentOutput) {
-          stateMessages.push(
-            new AIMessage({
-              id: uuid(),
-              content: `[${agentName} sub-agent result]: ${subAgentOutput}`,
-            }),
-          );
-        }
-
-        // Let supervisor decide next step
-        continue;
+      // Inject previous sub-agent results so later agents can see earlier outputs
+      for (const prev of subAgentResults) {
+        subAgentContext.push(
+          new AIMessage({
+            id: uuid(),
+            content: `[${prev.agent} sub-agent result]:\n${prev.output}`,
+          }),
+        );
       }
 
-      // Unknown agent name — supervisor will see the result and adapt
+      if (instruction) {
+        subAgentContext.push(
+          new SystemMessage(
+            `Additional instruction from supervisor: ${instruction}`,
+          ),
+        );
+      }
+
+      // Run sub-agent and yield its events; capture text output via return value
+      const subAgentGen = runSubAgent(agentName, subAgentContext, signal);
+      let subAgentOutput = "";
+      let genResult = await subAgentGen.next();
+
+      while (!genResult.done) {
+        yield genResult.value;
+        genResult = await subAgentGen.next();
+      }
+
+      // genResult.value is the return value (textOutput) from the generator
+      subAgentOutput = genResult.value || "";
+
+      // Store result for future sub-agents
+      if (subAgentOutput) {
+        subAgentResults.push({ agent: agentName, output: subAgentOutput });
+
+        // Feed sub-agent result back to supervisor
+        stateMessages.push(
+          new AIMessage({
+            id: uuid(),
+            content: `[${agentName} sub-agent result]:\n${subAgentOutput}`,
+          }),
+        );
+      }
+    }
+
+    // Handle regular backend tool calls (if any alongside delegation)
+    if (regularCalls.length > 0) {
+      const toolResult = await backendToolNode.invoke({
+        messages: stateMessages,
+      });
+      for (const message of asArray(toolResult.messages)) {
+        stateMessages.push(message);
+        if (message instanceof ToolMessage) {
+          yield* eventsFromToolMessage(message, supervisorMetadata);
+        }
+      }
+    }
+
+    // If we processed delegations, continue supervisor loop for next decision
+    if (delegateCalls.length > 0) {
       continue;
     }
-
-    // Regular backend tool calls
-    const toolResult = await backendToolNode.invoke({
-      messages: stateMessages,
-    });
-    for (const message of asArray(toolResult.messages)) {
-      stateMessages.push(message);
-      if (message instanceof ToolMessage) {
-        yield* eventsFromToolMessage(message, supervisorMetadata);
-      }
-    }
   }
+
+  // ── Close supervisor STEP at end of run ──
+  yield withStreamEventMetadata(
+    {
+      type: EventType.STEP_FINISHED,
+      stepName: "supervisor",
+    } as BaseEvent,
+    supervisorMetadata,
+  );
 
   if (!signal?.aborted) {
     yield {
