@@ -47,14 +47,14 @@ export interface ThreadSummary {
 export interface FrontendToolDefinition {
   name: string;
   description: string;
-  parameters: Record<string, any>; // JSON Schema
+  parameters: Record<string, unknown>; // JSON Schema
 }
 
 // A pending frontend tool call that needs user action
 export interface PendingToolCall {
   toolCallId: string;
   toolCallName: string;
-  args: Record<string, any>;
+  args: Record<string, unknown>;
   status: "pending" | "approved" | "rejected";
   result?: string;
 }

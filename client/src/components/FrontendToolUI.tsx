@@ -34,7 +34,8 @@ function ConfirmActionUI({
   toolCall: PendingToolCall;
   onResolve: (id: string, result: string) => void;
 }) {
-  const { action, severity = "medium" } = toolCall.args;
+  const action = toolCall.args.action as string | undefined;
+  const severity = (toolCall.args.severity as string) ?? "medium";
 
   return (
     <div className={`confirm-dialog severity-${severity}`}>
@@ -88,7 +89,8 @@ function CollectInputUI({
   onResolve: (id: string, result: string) => void;
 }) {
   const [value, setValue] = useState("");
-  const { prompt, placeholder } = toolCall.args;
+  const prompt = toolCall.args.prompt as string | undefined;
+  const placeholder = toolCall.args.placeholder as string | undefined;
 
   return (
     <div className="input-dialog">
