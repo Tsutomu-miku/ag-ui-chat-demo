@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AG-UI Protocol Sequence Diagram — ag-ui-chat-demo</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text2: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --pink: #f778ba;
+    --cyan: #39d353;
+    --teal: #2dd4bf;
+    --col-browser: #58a6ff;
+    --col-react: #61dafb;
+    --col-hono: #e36002;
+    --col-agui-enc: #bc8cff;
+    --col-langgraph: #3fb950;
+    --col-llm: #f59e0b;
+    --col-backend-tool: #2dd4bf;
+    --col-history: #f778ba;
+    --line-h: 52px;
+    --col-w: 120px;
+    --lane-gap: 156px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    padding: 40px 20px 80px;
+    min-height: 100vh;
+    overflow-x: auto;
+  }
+
+  h1 {
+    text-align: center;
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    text-align: center;
+    color: var(--text2);
+    font-size: 14px;
+    margin-bottom: 40px;
+  }
+
+  .subtitle a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  /* ===== Tabs ===== */
+  .tabs {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 36px;
+  }
+  .tab {
+    padding: 10px 24px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text2);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all .2s;
+  }
+  .tab:hover { border-color: var(--accent); color: var(--text); }
+  .tab.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
+  .scene { display: none; }
+  .scene.active { display: block; }
+
+  /* ===== Diagram Container ===== */
+  .diagram {
+    position: relative;
+    margin: 0 auto;
+    min-height: 600px;
+  }
+
+  /* ===== Participant Headers ===== */
+  .participants {
+    display: flex;
+    position: relative;
+    margin-bottom: 24px;
+  }
+
+  .participant {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: absolute;
+    top: 0;
+  }
+
+  .participant .box {
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: 2px solid;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    white-space: nowrap;
+    background: var(--surface);
+    position: relative;
+    z-index: 2;
+  }
+
+  .participant .role {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--text2);
+    margin-top: 2px;
+    display: block;
+  }
+
+  .participant .pkg {
+    font-size: 10px;
+    color: var(--text2);
+    margin-top: 4px;
+    font-family: 'SF Mono', Menlo, monospace;
+  }
+
+  /* ===== Lifelines ===== */
+  .lifeline {
+    position: absolute;
+    width: 2px;
+    background: repeating-linear-gradient(
+      to bottom,
+      var(--border) 0,
+      var(--border) 6px,
+      transparent 6px,
+      transparent 12px
+    );
+    z-index: 0;
+  }
+
+  /* ===== Messages (arrows) ===== */
+  .messages {
+    position: relative;
+    margin-top: 12px;
+  }
+
+  .msg-row {
+    position: relative;
+    height: var(--line-h);
+    display: flex;
+    align-items: center;
+  }
+
+  .msg-arrow {
+    position: absolute;
+    height: 2px;
+    z-index: 1;
+  }
+
+  .msg-arrow.solid { background: var(--accent); }
+  .msg-arrow.dashed {
+    background: repeating-linear-gradient(
+      to right,
+      var(--text2) 0,
+      var(--text2) 6px,
+      transparent 6px,
+      transparent 12px
+    );
+  }
+
+  .msg-arrow .head {
+    position: absolute;
+    right: -1px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+  }
+
+  .msg-arrow.solid .head { border-left: 10px solid var(--accent); }
+  .msg-arrow.dashed .head { border-left: 10px solid var(--text2); }
+
+  .msg-arrow.left .head {
+    left: -1px;
+    right: auto;
+    border-left: none;
+  }
+  .msg-arrow.left.solid .head { border-right: 10px solid var(--accent); }
+  .msg-arrow.left.dashed .head { border-right: 10px solid var(--text2); }
+
+  .msg-label {
+    position: absolute;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 500;
+    top: -20px;
+    z-index: 3;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .msg-label.above { top: -20px; }
+
+  .msg-label code {
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+    background: rgba(88, 166, 255, 0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+
+  .msg-label .event-type {
+    background: rgba(188, 140, 255, 0.15);
+    color: var(--purple);
+  }
+
+  .msg-label .tool-badge {
+    background: rgba(45, 212, 191, 0.15);
+    color: var(--teal);
+  }
+
+  .msg-label .frontend-badge {
+    background: rgba(247, 120, 186, 0.15);
+    color: var(--pink);
+  }
+
+  .msg-label .history-badge {
+    background: rgba(247, 120, 186, 0.15);
+    color: var(--pink);
+  }
+
+  /* ===== Self-call (loop) ===== */
+  .self-call {
+    position: absolute;
+    border: 2px solid;
+    border-left: none;
+    border-radius: 0 8px 8px 0;
+    z-index: 1;
+  }
+
+  .self-call .head {
+    position: absolute;
+    bottom: -1px;
+    left: -1px;
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+  }
+
+  /* ===== Notes ===== */
+  .note {
+    position: absolute;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    z-index: 2;
+    max-width: 200px;
+    border: 1px solid;
+  }
+
+  .note.agui {
+    background: rgba(188, 140, 255, 0.08);
+    border-color: rgba(188, 140, 255, 0.3);
+    color: var(--purple);
+  }
+
+  .note.green {
+    background: rgba(63, 185, 80, 0.08);
+    border-color: rgba(63, 185, 80, 0.3);
+    color: var(--green);
+  }
+
+  .note.orange {
+    background: rgba(210, 153, 34, 0.08);
+    border-color: rgba(210, 153, 34, 0.3);
+    color: var(--orange);
+  }
+
+  .note.pink {
+    background: rgba(247, 120, 186, 0.08);
+    border-color: rgba(247, 120, 186, 0.3);
+    color: var(--pink);
+  }
+
+  .note.blue {
+    background: rgba(88, 166, 255, 0.08);
+    border-color: rgba(88, 166, 255, 0.3);
+    color: var(--accent);
+  }
+
+  .note strong { font-weight: 600; }
+
+  /* ===== Separator ===== */
+  .separator {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 2;
+  }
+
+  .separator::before,
+  .separator::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .separator span {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text2);
+    white-space: nowrap;
+    padding: 4px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  /* ===== Activation bar ===== */
+  .activation {
+    position: absolute;
+    width: 12px;
+    border-radius: 3px;
+    z-index: 1;
+    opacity: 0.35;
+  }
+
+  /* ===== Legend ===== */
+  .legend {
+    max-width: 960px;
+    margin: 48px auto 0;
+    padding: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+
+  .legend h3 {
+    font-size: 15px;
+    margin-bottom: 16px;
+    color: var(--text);
+  }
+
+  .legend-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+
+  .legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  .legend-item strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* ===== Footer ===== */
+  .footer {
+    text-align: center;
+    margin-top: 40px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+</style>
+</head>
+<body>
+
+<h1>AG-UI Protocol Sequence Diagram</h1>
+<p class="subtitle">Based on <a href="https://github.com/Tsutomu-miku/ag-ui-chat-demo" target="_blank">ag-ui-chat-demo</a> repository — illustrating how AG-UI connects every layer</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab(0)">Scenario 1: Text + Backend Tool</div>
+  <div class="tab" onclick="switchTab(1)">Scenario 2: Frontend Tool (Human-in-the-loop)</div>
+  <div class="tab" onclick="switchTab(2)">Scenario 3: History Hydration</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SCENARIO 1: Text Response + Backend Tool Call                 -->
+<!-- ============================================================ -->
+<div class="scene active" id="scene0">
+<div class="diagram" style="width:1200px; height:1720px;">
+
+  <!-- Participants -->
+  <div class="participants" style="height:80px;">
+    <div class="participant" style="left:40px;">
+      <div class="box" style="border-color:var(--col-browser);">Browser<span class="role">React UI</span></div>
+      <div class="pkg">ChatPanel.tsx</div>
+    </div>
+    <div class="participant" style="left:220px;">
+      <div class="box" style="border-color:var(--col-react);">useAgentChat<span class="role">AG-UI Client Hook</span></div>
+      <div class="pkg">useAgentChat.ts</div>
+    </div>
+    <div class="participant" style="left:430px;">
+      <div class="box" style="border-color:var(--col-hono);">Hono Route<span class="role">HTTP Endpoint</span></div>
+      <div class="pkg">routes/agent.ts</div>
+    </div>
+    <div class="participant" style="left:620px;">
+      <div class="box" style="border-color:var(--col-agui-enc);">EventEncoder<span class="role">AG-UI SSE Encoder</span></div>
+      <div class="pkg">@ag-ui/encoder</div>
+    </div>
+    <div class="participant" style="left:800px;">
+      <div class="box" style="border-color:var(--col-langgraph);">LangGraph<span class="role">Agent State Machine</span></div>
+      <div class="pkg">langgraph.ts</div>
+    </div>
+    <div class="participant" style="left:990px;">
+      <div class="box" style="border-color:var(--col-llm);">LLM<span class="role">OpenAI / OpenRouter</span></div>
+      <div class="pkg">ChatOpenAI</div>
+    </div>
+  </div>
+
+  <!-- Lifelines -->
+  <div class="lifeline" style="left:90px; top:80px; height:1620px; background-image: repeating-linear-gradient(to bottom, var(--col-browser) 0, var(--col-browser) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:280px; top:80px; height:1620px; background-image: repeating-linear-gradient(to bottom, var(--col-react) 0, var(--col-react) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:488px; top:80px; height:1620px; background-image: repeating-linear-gradient(to bottom, var(--col-hono) 0, var(--col-hono) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:680px; top:80px; height:1620px; background-image: repeating-linear-gradient(to bottom, var(--col-agui-enc) 0, var(--col-agui-enc) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:860px; top:80px; height:1620px; background-image: repeating-linear-gradient(to bottom, var(--col-langgraph) 0, var(--col-langgraph) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:1050px; top:80px; height:1620px; background-image: repeating-linear-gradient(to bottom, var(--col-llm) 0, var(--col-llm) 6px, transparent 6px, transparent 12px);"></div>
+
+  <!-- Phase 1: User sends message -->
+  <div class="separator" style="top:108px;"><span>Phase 1 — User Sends Message</span></div>
+
+  <!-- 1. Browser -> useAgentChat: handleSend() -->
+  <div class="msg-row" style="position:absolute; top:148px; left:0;">
+    <div class="msg-arrow solid" style="left:92px; width:186px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:110px; color:var(--text);">handleSend() → <code>sendMessage(threadId, [userMsg])</code></div>
+  </div>
+
+  <!-- 2. useAgentChat -> Hono: POST /api/agent -->
+  <div class="msg-row" style="position:absolute; top:200px; left:0;">
+    <div class="msg-arrow solid" style="left:282px; width:204px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:290px; color:var(--accent);"><code>POST /api/agent</code> { threadId, runId, messages, <code class="event-type">tools: [frontendTools]</code> }</div>
+  </div>
+
+  <div class="note agui" style="top:192px; left:290px; max-width:240px;">
+    <strong>AG-UI RunAgentInput</strong><br>
+    messages + frontend tool definitions<br>sent as JSON body, Accept: text/event-stream
+  </div>
+
+  <!-- Phase 2: Server processes -->
+  <div class="separator" style="top:270px;"><span>Phase 2 — Server: History Hydration + Agent Execution</span></div>
+
+  <!-- 3. Hono -> History: buildMessagesWithHistory -->
+  <div class="note green" style="top:310px; left:500px; max-width:180px;">
+    <strong>context.ts</strong><br>
+    buildMessagesWithHistory() 合并已持久化的历史消息 + 本次新消息
+  </div>
+
+  <!-- 4. Hono -> EventEncoder: new EventEncoder() -->
+  <div class="msg-row" style="position:absolute; top:378px; left:0;">
+    <div class="msg-arrow solid" style="left:490px; width:188px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:500px; color:var(--purple);"><code class="event-type">new EventEncoder({ accept })</code></div>
+  </div>
+
+  <!-- 5. Hono -> LangGraph: runLangGraphAgent(input, signal) -->
+  <div class="msg-row" style="position:absolute; top:430px; left:0;">
+    <div class="msg-arrow solid" style="left:490px; width:368px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:530px; color:var(--green);"><code>runLangGraphAgent(input, signal)</code> → AsyncGenerator&lt;BaseEvent&gt;</div>
+  </div>
+
+  <!-- Phase 3: LangGraph ReAct Loop -->
+  <div class="separator" style="top:486px;"><span>Phase 3 — LangGraph ReAct Loop (Backend Tool)</span></div>
+
+  <!-- 6. LangGraph yield RUN_STARTED -->
+  <div class="msg-row" style="position:absolute; top:528px; left:0;">
+    <div class="msg-arrow dashed left" style="left:490px; width:368px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:560px; color:var(--purple);"><code class="event-type">yield RUN_STARTED</code> { threadId, runId }</div>
+  </div>
+
+  <!-- 6b. Hono -> EventEncoder: encode(event) -->
+  <div class="msg-row" style="position:absolute; top:572px; left:0;">
+    <div class="msg-arrow solid" style="left:490px; width:188px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:500px; color:var(--purple);"><code class="event-type">encoder.encode(event)</code> → <code>data: {"type":"RUN_STARTED"...}\n\n</code></div>
+  </div>
+
+  <!-- 6c. Hono -> Client: SSE chunk -->
+  <div class="msg-row" style="position:absolute; top:616px; left:0;">
+    <div class="msg-arrow dashed left" style="left:282px; width:206px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:310px; color:var(--text2);">SSE: <code class="event-type">RUN_STARTED</code></div>
+  </div>
+
+  <!-- 7. LangGraph -> LLM: model.bindTools([...backend, ...frontend]).invoke() -->
+  <div class="msg-row" style="position:absolute; top:660px; left:0;">
+    <div class="msg-arrow solid" style="left:862px; width:186px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:870px; color:var(--orange);">model.bindTools([backend + frontend]).invoke()</div>
+  </div>
+
+  <div class="note orange" style="top:656px; left:970px; max-width:210px;">
+    <strong>LLM sees ALL tools</strong><br>
+    Backend tools (get_weather etc.) +<br>Frontend tools (confirm_action etc.)<br>as function definitions
+  </div>
+
+  <!-- 8. LLM returns: text + tool_call(get_weather) -->
+  <div class="msg-row" style="position:absolute; top:734px; left:0;">
+    <div class="msg-arrow dashed left" style="left:862px; width:186px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:870px; color:var(--orange);">AIMessage { content: "Let me check...", tool_calls: [get_weather({city:"Tokyo"})] }</div>
+  </div>
+
+  <!-- 9. LangGraph yields AG-UI events from AIMessage -->
+  <div class="msg-row" style="position:absolute; top:790px; left:0;">
+    <div class="msg-arrow dashed left" style="left:490px; width:368px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:520px; color:var(--purple);">
+      <code class="event-type">yield TEXT_MESSAGE_START</code> →
+      <code class="event-type">TEXT_MESSAGE_CONTENT</code> →
+      <code class="event-type">TEXT_MESSAGE_END</code>
+    </div>
+  </div>
+
+  <div class="note agui" style="top:820px; left:530px; max-width:220px;">
+    <strong>eventsFromAIMessage()</strong><br>
+    将 LangChain AIMessage 转换为 AG-UI 事件序列：<br>
+    文本 → TEXT_MESSAGE_*<br>
+    工具调用 → TOOL_CALL_*
+  </div>
+
+  <!-- 9b. yield TOOL_CALL events -->
+  <div class="msg-row" style="position:absolute; top:910px; left:0;">
+    <div class="msg-arrow dashed left" style="left:490px; width:368px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:520px; color:var(--purple);">
+      <code class="event-type">yield TOOL_CALL_START</code> →
+      <code class="event-type">TOOL_CALL_ARGS</code> →
+      <code class="event-type">TOOL_CALL_END</code>
+    </div>
+  </div>
+
+  <!-- 10. Each event: Hono encode + stream to client -->
+  <div class="msg-row" style="position:absolute; top:960px; left:0;">
+    <div class="msg-arrow solid" style="left:490px; width:188px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:500px; color:var(--purple);"><code class="event-type">encoder.encode(event)</code> per event → SSE string</div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:1004px; left:0;">
+    <div class="msg-arrow dashed left" style="left:282px; width:206px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:290px; color:var(--text2);">SSE stream: <code class="event-type">TEXT_*</code> + <code class="event-type">TOOL_CALL_*</code> events</div>
+  </div>
+
+  <!-- 10b. Client parses & renders -->
+  <div class="msg-row" style="position:absolute; top:1048px; left:0;">
+    <div class="msg-arrow dashed left" style="left:92px; width:186px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:100px; color:var(--col-react);">parseSSEStream() → setStreamingContent() + setStreamingToolCalls()</div>
+  </div>
+
+  <!-- Phase 4: shouldContinue → "tools" -->
+  <div class="separator" style="top:1090px;"><span>Phase 4 — shouldContinue() → "tools" (Backend Tool Execution)</span></div>
+
+  <div class="note green" style="top:1126px; left:800px; max-width:220px;">
+    <strong>shouldContinue()</strong><br>
+    tool_call name ∉ frontendToolNames<br>→ route to <code>ToolNode</code><br>→ 执行 get_weather() 真实逻辑
+  </div>
+
+  <!-- 11. LangGraph -> Backend Tool -->
+  <div class="msg-row" style="position:absolute; top:1210px; left:0;">
+    <div class="msg-arrow dashed left" style="left:490px; width:368px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:520px; color:var(--teal);">
+      <code class="event-type">yield TOOL_CALL_RESULT</code> { toolCallId, content: "{city:'Tokyo', temp:'25°C'}" }
+    </div>
+  </div>
+
+  <!-- 12. LangGraph -> LLM again (ReAct loop) -->
+  <div class="msg-row" style="position:absolute; top:1264px; left:0;">
+    <div class="msg-arrow solid" style="left:862px; width:186px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:876px; color:var(--orange);">ReAct loop: model.invoke([...messages, toolResult])</div>
+  </div>
+
+  <!-- 13. LLM final answer -->
+  <div class="msg-row" style="position:absolute; top:1316px; left:0;">
+    <div class="msg-arrow dashed left" style="left:862px; width:186px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:876px; color:var(--orange);">AIMessage { content: "The weather in Tokyo is 25°C..." }</div>
+  </div>
+
+  <!-- 14. Final TEXT events + RUN_FINISHED -->
+  <div class="msg-row" style="position:absolute; top:1372px; left:0;">
+    <div class="msg-arrow dashed left" style="left:490px; width:368px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:520px; color:var(--purple);">
+      <code class="event-type">yield TEXT_MESSAGE_*</code> (final answer) → <code class="event-type">RUN_FINISHED</code>
+    </div>
+  </div>
+
+  <!-- 15. All events encoded & streamed -->
+  <div class="msg-row" style="position:absolute; top:1416px; left:0;">
+    <div class="msg-arrow dashed left" style="left:282px; width:206px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:290px; color:var(--text2);">SSE: final <code class="event-type">TEXT_MESSAGE_*</code> + <code class="event-type">RUN_FINISHED</code></div>
+  </div>
+
+  <!-- Phase 5: Persist History -->
+  <div class="separator" style="top:1460px;"><span>Phase 5 — Backend Auto-Persists History</span></div>
+
+  <div class="note pink" style="top:1496px; left:440px; max-width:240px;">
+    <strong>persistHistory()</strong><br>
+    从 AG-UI events 重建 assistant 消息<br>
+    TEXT_MESSAGE_CONTENT → 拼接 content<br>
+    TOOL_CALL_* → 重建 toolCalls[]<br>
+    TOOL_CALL_RESULT → 存 tool message<br>
+    去重后 appendMessages() 到 store
+  </div>
+
+  <!-- 16. Client refreshes from server -->
+  <div class="msg-row" style="position:absolute; top:1620px; left:0;">
+    <div class="msg-arrow solid" style="left:92px; width:394px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:130px; color:var(--accent);">onComplete → <code>refreshActive()</code> → <code>GET /api/history/threads/:id</code></div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:1664px; left:0;">
+    <div class="msg-arrow dashed left" style="left:92px; width:394px;">
+      <div class="head"></div>
+    </div>
+    <div class="msg-label above" style="left:200px; color:var(--text2);">{ messages: [...user, ...assistant(with toolCalls), ...tool] }</div>
+  </div>
+
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SCENARIO 2: Frontend Tool (Human-in-the-loop)                -->
+<!-- ============================================================ -->
+<div class="scene" id="scene1">
+<div class="diagram" style="width:1200px; height:1900px;">
+
+  <!-- Participants -->
+  <div class="participants" style="height:80px;">
+    <div class="participant" style="left:20px;">
+      <div class="box" style="border-color:var(--col-browser);">User<span class="role">Human</span></div>
+    </div>
+    <div class="participant" style="left:170px;">
+      <div class="box" style="border-color:var(--col-react);">ChatPanel<span class="role">React Component</span></div>
+      <div class="pkg">ChatPanel.tsx</div>
+    </div>
+    <div class="participant" style="left:370px;">
+      <div class="box" style="border-color:var(--col-react);">useAgentChat<span class="role">AG-UI Client</span></div>
+      <div class="pkg">useAgentChat.ts</div>
+    </div>
+    <div class="participant" style="left:580px;">
+      <div class="box" style="border-color:var(--col-hono);">Hono Server<span class="role">AG-UI Endpoint</span></div>
+      <div class="pkg">routes/agent.ts</div>
+    </div>
+    <div class="participant" style="left:790px;">
+      <div class="box" style="border-color:var(--col-langgraph);">LangGraph<span class="role">StateGraph</span></div>
+      <div class="pkg">langgraph.ts</div>
+    </div>
+    <div class="participant" style="left:990px;">
+      <div class="box" style="border-color:var(--col-llm);">LLM<span class="role">ChatOpenAI</span></div>
+    </div>
+  </div>
+
+  <!-- Lifelines -->
+  <div class="lifeline" style="left:60px; top:80px; height:1800px; background-image: repeating-linear-gradient(to bottom, var(--col-browser) 0, var(--col-browser) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:228px; top:80px; height:1800px; background-image: repeating-linear-gradient(to bottom, var(--col-react) 0, var(--col-react) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:430px; top:80px; height:1800px; background-image: repeating-linear-gradient(to bottom, var(--col-react) 0, var(--col-react) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:642px; top:80px; height:1800px; background-image: repeating-linear-gradient(to bottom, var(--col-hono) 0, var(--col-hono) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:850px; top:80px; height:1800px; background-image: repeating-linear-gradient(to bottom, var(--col-langgraph) 0, var(--col-langgraph) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:1040px; top:80px; height:1800px; background-image: repeating-linear-gradient(to bottom, var(--col-llm) 0, var(--col-llm) 6px, transparent 6px, transparent 12px);"></div>
+
+  <!-- Turn 1: Request with frontend tool -->
+  <div class="separator" style="top:108px;"><span>Turn 1 — User Message → Agent Calls Frontend Tool</span></div>
+
+  <!-- User types -->
+  <div class="msg-row" style="position:absolute; top:148px;">
+    <div class="msg-arrow solid" style="left:62px; width:164px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:70px; color:var(--text);">"Please deploy production server, confirm first"</div>
+  </div>
+
+  <!-- ChatPanel -> useAgentChat -->
+  <div class="msg-row" style="position:absolute; top:200px;">
+    <div class="msg-arrow solid" style="left:230px; width:198px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:240px; color:var(--col-react);">sendMessage(threadId, [userMsg], onComplete)</div>
+  </div>
+
+  <!-- useAgentChat -> Hono -->
+  <div class="msg-row" style="position:absolute; top:252px;">
+    <div class="msg-arrow solid" style="left:432px; width:208px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:440px; color:var(--accent);"><code>POST /api/agent</code> { messages, <code class="frontend-badge">tools: [confirm_action, collect_user_input]</code> }</div>
+  </div>
+
+  <div class="note agui" style="top:244px; left:446px; max-width:220px;">
+    <strong>AG-UI 核心设计</strong><br>
+    前端工具定义通过 <code>RunAgentInput.tools</code> 随请求传递给后端
+  </div>
+
+  <!-- Hono -> LangGraph -->
+  <div class="msg-row" style="position:absolute; top:334px;">
+    <div class="msg-arrow solid" style="left:644px; width:204px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:660px; color:var(--green);">runLangGraphAgent(input) — createAgentGraph(frontendTools)</div>
+  </div>
+
+  <div class="note green" style="top:364px; left:780px; max-width:210px;">
+    <strong>createAgentGraph()</strong><br>
+    将 frontend tools 转为 model function schema<br>
+    model.bindTools([...backend, ...frontend])
+  </div>
+
+  <!-- LangGraph -> LLM -->
+  <div class="msg-row" style="position:absolute; top:446px;">
+    <div class="msg-arrow solid" style="left:852px; width:186px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:870px; color:var(--orange);">invoke() with all tools bound</div>
+  </div>
+
+  <!-- LLM returns frontend tool call -->
+  <div class="msg-row" style="position:absolute; top:498px;">
+    <div class="msg-arrow dashed left" style="left:852px; width:186px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:860px; color:var(--orange);">AIMessage { tool_calls: [<code class="frontend-badge">confirm_action</code>({action: "deploy prod", severity: "high"})] }</div>
+  </div>
+
+  <!-- shouldContinue decision -->
+  <div class="note green" style="top:540px; left:800px; max-width:220px;">
+    <strong>shouldContinue()</strong><br>
+    "confirm_action" ∈ frontendToolNames<br>
+    → return <strong>END</strong><br>
+    不进入 ToolNode，不在后端执行！
+  </div>
+
+  <!-- yield AG-UI events -->
+  <div class="msg-row" style="position:absolute; top:634px;">
+    <div class="msg-arrow dashed left" style="left:644px; width:204px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:660px; color:var(--purple);">
+      <code class="event-type">TOOL_CALL_START</code> { toolCallName: "confirm_action" } →
+      <code class="event-type">TOOL_CALL_ARGS</code> →
+      <code class="event-type">TOOL_CALL_END</code>
+    </div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:686px;">
+    <div class="msg-arrow dashed left" style="left:644px; width:204px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:700px; color:var(--purple);"><code class="event-type">RUN_FINISHED</code> — Run 结束，等待前端处理</div>
+  </div>
+
+  <!-- SSE to client -->
+  <div class="msg-row" style="position:absolute; top:738px;">
+    <div class="msg-arrow dashed left" style="left:432px; width:208px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:450px; color:var(--text2);">SSE stream → parseSSEStream()</div>
+  </div>
+
+  <!-- useAgentChat detects frontend tool -->
+  <div class="msg-row" style="position:absolute; top:790px;">
+    <div class="msg-arrow dashed left" style="left:230px; width:198px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:240px; color:var(--pink);">setPendingToolCalls([{toolCallName: "confirm_action", args, status: "pending"}])</div>
+  </div>
+
+  <div class="note pink" style="top:818px; left:240px; max-width:230px;">
+    <strong>Frontend 拦截逻辑</strong><br>
+    TOOL_CALL_END 时检查 name ∈ frontendToolNames<br>
+    → 加入 pendingToolCalls<br>
+    → <strong>不调用 onComplete</strong>（历史还不能刷新）
+  </div>
+
+  <!-- ChatPanel renders FrontendToolUI -->
+  <div class="msg-row" style="position:absolute; top:924px;">
+    <div class="msg-arrow dashed left" style="left:62px; width:164px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:70px; color:var(--pink);">渲染 <code class="frontend-badge">FrontendToolUI</code> → ConfirmActionUI { severity: "high" }</div>
+  </div>
+
+  <!-- User interaction -->
+  <div class="separator" style="top:976px;"><span>👤 User Interaction — Human Reviews and Decides</span></div>
+
+  <div class="msg-row" style="position:absolute; top:1020px;">
+    <div class="msg-arrow solid" style="left:62px; width:164px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:80px; color:var(--green);">User clicks <strong>"Approve"</strong> ✅</div>
+  </div>
+
+  <!-- Turn 2: Send tool result back -->
+  <div class="separator" style="top:1072px;"><span>Turn 2 — Frontend Sends Tool Result → Agent Continues</span></div>
+
+  <div class="msg-row" style="position:absolute; top:1116px;">
+    <div class="msg-arrow solid" style="left:230px; width:198px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:240px; color:var(--col-react);">resolveToolCall(toolCallId, '{"approved":true}')</div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:1168px;">
+    <div class="msg-arrow solid" style="left:432px; width:208px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:440px; color:var(--accent);"><code>POST /api/agent</code> { messages: [<code class="tool-badge">{ role:"tool", toolCallId, content:'{"approved":true}' }</code>] }</div>
+  </div>
+
+  <div class="note agui" style="top:1158px; left:446px; max-width:240px;">
+    <strong>AG-UI Multi-turn Protocol</strong><br>
+    前端只发新的 tool result 消息<br>
+    后端通过 buildMessagesWithHistory()<br>
+    自动合并历史上下文
+  </div>
+
+  <!-- Server hydrates and continues -->
+  <div class="msg-row" style="position:absolute; top:1268px;">
+    <div class="msg-arrow solid" style="left:644px; width:204px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:660px; color:var(--green);">runLangGraphAgent() — messages now include tool result</div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:1320px;">
+    <div class="msg-arrow solid" style="left:852px; width:186px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:870px; color:var(--orange);">invoke() with full context + tool result</div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:1372px;">
+    <div class="msg-arrow dashed left" style="left:852px; width:186px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:862px; color:var(--orange);">AIMessage { content: "Production deployment approved. Proceeding..." }</div>
+  </div>
+
+  <!-- Final events -->
+  <div class="msg-row" style="position:absolute; top:1428px;">
+    <div class="msg-arrow dashed left" style="left:644px; width:204px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:660px; color:var(--purple);">
+      <code class="event-type">RUN_STARTED</code> → <code class="event-type">TEXT_MESSAGE_*</code> → <code class="event-type">RUN_FINISHED</code>
+    </div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:1480px;">
+    <div class="msg-arrow dashed left" style="left:432px; width:208px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:460px; color:var(--text2);">SSE → setStreamingContent("Production deployment approved...")</div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:1532px;">
+    <div class="msg-arrow dashed left" style="left:230px; width:198px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:240px; color:var(--col-react);">Render final assistant message</div>
+  </div>
+
+  <!-- Persist & refresh -->
+  <div class="separator" style="top:1580px;"><span>Phase: Persist + Refresh</span></div>
+
+  <div class="note pink" style="top:1616px; left:580px; max-width:200px;">
+    <strong>persistHistory()</strong><br>
+    两次 run 的事件都被持久化<br>
+    user → assistant(toolCall) → tool(result) → assistant(final)
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:1720px;">
+    <div class="msg-arrow solid" style="left:230px; width:410px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:300px; color:var(--accent);">onComplete → <code>GET /api/history/threads/:id</code> → 刷新完整对话</div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:1772px;">
+    <div class="msg-arrow dashed left" style="left:62px; width:164px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:70px; color:var(--text2);">显示完整对话历史（包含 tool call 卡片）</div>
+  </div>
+
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SCENARIO 3: History Hydration                                 -->
+<!-- ============================================================ -->
+<div class="scene" id="scene2">
+<div class="diagram" style="width:1100px; height:1060px;">
+
+  <!-- Participants -->
+  <div class="participants" style="height:80px;">
+    <div class="participant" style="left:40px;">
+      <div class="box" style="border-color:var(--col-react);">useAgentChat<span class="role">Frontend</span></div>
+    </div>
+    <div class="participant" style="left:280px;">
+      <div class="box" style="border-color:var(--col-hono);">agent route<span class="role">POST /api/agent</span></div>
+      <div class="pkg">routes/agent.ts</div>
+    </div>
+    <div class="participant" style="left:530px;">
+      <div class="box" style="border-color:var(--col-history);">History Context<span class="role">context.ts</span></div>
+      <div class="pkg">buildMessagesWithHistory</div>
+    </div>
+    <div class="participant" style="left:790px;">
+      <div class="box" style="border-color:var(--col-history);">History Store<span class="role">store.ts</span></div>
+      <div class="pkg">Map&lt;string, ChatThread&gt;</div>
+    </div>
+  </div>
+
+  <!-- Lifelines -->
+  <div class="lifeline" style="left:100px; top:80px; height:960px; background-image: repeating-linear-gradient(to bottom, var(--col-react) 0, var(--col-react) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:340px; top:80px; height:960px; background-image: repeating-linear-gradient(to bottom, var(--col-hono) 0, var(--col-hono) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:600px; top:80px; height:960px; background-image: repeating-linear-gradient(to bottom, var(--col-history) 0, var(--col-history) 6px, transparent 6px, transparent 12px);"></div>
+  <div class="lifeline" style="left:850px; top:80px; height:960px; background-image: repeating-linear-gradient(to bottom, var(--col-history) 0, var(--col-history) 6px, transparent 6px, transparent 12px);"></div>
+
+  <div class="separator" style="top:108px;"><span>前端只发本次新消息，后端自动补全历史</span></div>
+
+  <!-- Step 1 -->
+  <div class="msg-row" style="position:absolute; top:160px;">
+    <div class="msg-arrow solid" style="left:102px; width:236px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:110px; color:var(--accent);"><code>POST /api/agent</code> { threadId: "t-123", messages: [<strong>only new user msg</strong>] }</div>
+  </div>
+
+  <div class="note blue" style="top:154px; left:108px; max-width:200px;">
+    <strong>前端优化</strong><br>
+    不发送完整历史<br>
+    只发本轮新消息<br>
+    减少网络传输
+  </div>
+
+  <!-- Step 2 -->
+  <div class="msg-row" style="position:absolute; top:260px;">
+    <div class="msg-arrow solid" style="left:342px; width:256px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:350px; color:var(--pink);">buildMessagesWithHistory("t-123", incomingMessages)</div>
+  </div>
+
+  <!-- Step 3 -->
+  <div class="msg-row" style="position:absolute; top:312px;">
+    <div class="msg-arrow solid" style="left:602px; width:246px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:620px; color:var(--pink);">getOrCreateThread("t-123") → stored messages</div>
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:364px;">
+    <div class="msg-arrow dashed left" style="left:602px; width:246px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:620px; color:var(--text2);">ChatThread { messages: [prev user, prev assistant, ...] }</div>
+  </div>
+
+  <div class="note pink" style="top:400px; left:530px; max-width:250px;">
+    <strong>合并算法 (context.ts)</strong><br>
+    1. 遍历 thread.messages → 加入 result<br>
+    2. 遍历 incoming messages:<br>
+    &nbsp;&nbsp;• 跳过 knownMessageIds<br>
+    &nbsp;&nbsp;• 跳过重复 assistant toolCall<br>
+    &nbsp;&nbsp;• 追加新消息<br>
+    3. 返回完整有序消息数组
+  </div>
+
+  <!-- Step 4 return -->
+  <div class="msg-row" style="position:absolute; top:550px;">
+    <div class="msg-arrow dashed left" style="left:342px; width:256px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:360px; color:var(--pink);">hydratedMessages: [all history + new msg] (去重)</div>
+  </div>
+
+  <!-- Step 5 -->
+  <div class="note green" style="top:590px; left:280px; max-width:240px;">
+    <strong>传给 LangGraph</strong><br>
+    runLangGraphAgent({ ...input, messages: hydratedMessages })<br>
+    Agent 拿到完整上下文进行推理
+  </div>
+
+  <div class="separator" style="top:680px;"><span>Agent Run 完成后 — 持久化</span></div>
+
+  <div class="msg-row" style="position:absolute; top:720px;">
+    <div class="msg-arrow solid" style="left:342px; width:506px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:400px; color:var(--pink);">persistHistory(threadId, inputMessages, events) → appendMessages()</div>
+  </div>
+
+  <div class="note pink" style="top:756px; left:540px; max-width:250px;">
+    <strong>持久化算法 (persistence.ts)</strong><br>
+    1. 输入消息去重后存入<br>
+    2. 从 AG-UI events 重建 assistant 消息:<br>
+    &nbsp;&nbsp;TEXT_MESSAGE_* → content<br>
+    &nbsp;&nbsp;TOOL_CALL_* → toolCalls[]<br>
+    &nbsp;&nbsp;TOOL_CALL_RESULT → tool message<br>
+    3. 跳过已存在的 message ID<br>
+    4. 跳过重复的 assistant toolCall<br>
+    5. appendMessages() 写入 store
+  </div>
+
+  <div class="msg-row" style="position:absolute; top:910px;">
+    <div class="msg-arrow dashed left" style="left:102px; width:236px;"><div class="head"></div></div>
+    <div class="msg-label above" style="left:130px; color:var(--text2);">onComplete → refreshActive() → GET /api/history/threads/:id</div>
+  </div>
+
+  <div class="note blue" style="top:940px; left:60px; max-width:240px;">
+    下次用户发消息时，后端已有完整历史<br>前端只需发新消息即可
+  </div>
+
+</div>
+</div>
+
+<!-- ===== Legend ===== -->
+<div class="legend">
+  <h3>Legend — Participants & AG-UI Components</h3>
+  <div class="legend-grid">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--col-browser);"></div><strong>Browser / User</strong> — React UI layer</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--col-react);"></div><strong>useAgentChat</strong> — AG-UI SSE client hook</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--col-hono);"></div><strong>Hono Route</strong> — HTTP endpoint, orchestrates AG-UI flow</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--col-agui-enc);"></div><strong>@ag-ui/encoder</strong> — EventEncoder: BaseEvent → SSE string</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--col-langgraph);"></div><strong>LangGraph</strong> — StateGraph agent, yields AG-UI BaseEvent</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--col-llm);"></div><strong>LLM (ChatOpenAI)</strong> — Language model with tool binding</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--col-history);"></div><strong>History Service</strong> — In-memory KV store + persistence</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--col-backend-tool);"></div><strong>Backend Tools</strong> — Server-side tool execution (ToolNode)</div>
+  </div>
+  <div style="margin-top:16px; display:flex; gap:24px; flex-wrap:wrap; font-size:12px;">
+    <span>━━━ Solid arrow = synchronous call</span>
+    <span style="color:var(--text2);">┅┅┅ Dashed arrow = async response / yield</span>
+    <span><code class="event-type" style="font-size:11px;">Purple badge</code> = AG-UI Event Type</span>
+    <span><code class="frontend-badge" style="font-size:11px;">Pink badge</code> = Frontend Tool</span>
+    <span><code class="tool-badge" style="font-size:11px;">Teal badge</code> = Backend Tool</span>
+  </div>
+</div>
+
+<p class="footer">Generated from <a href="https://github.com/Tsutomu-miku/ag-ui-chat-demo" target="_blank" style="color:var(--accent);">Tsutomu-miku/ag-ui-chat-demo</a> source code</p>
+
+<script>
+function switchTab(index) {
+  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === index));
+  document.querySelectorAll('.scene').forEach((s, i) => s.classList.toggle('active', i === index));
+}
+</script>
+
+</body>
+</html>
