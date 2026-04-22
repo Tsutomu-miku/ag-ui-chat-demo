@@ -1,0 +1,40 @@
+{
+  "name": "ag-ui-langchain",
+  "version": "0.1.0",
+  "description": "AG-UI protocol adapter for LangChain/LangGraph \u2014 TypeScript implementation aligned with Python ag-ui-langgraph",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ag-ui/core": "^0.0.52",
+    "@langchain/core": "^0.3.80",
+    "@langchain/langgraph": "^0.2.60",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.4",
+    "@types/node": "^22.0.0",
+    "@types/uuid": "^10.0.0"
+  },
+  "peerDependencies": {
+    "@langchain/core": ">=0.3.0",
+    "@langchain/langgraph": ">=0.2.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT"
+}

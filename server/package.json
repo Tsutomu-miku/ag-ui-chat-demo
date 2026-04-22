@@ -20,6 +20,8 @@
     "@langchain/openai": "^0.5.0",
     "@langchain/core": "^0.3.80",
     "@langchain/langgraph": "^0.2.60",
+    "ag-ui-langchain": "workspace:*",
+    "ag-ui-hono": "workspace:*",
     "zod": "^3.24.0",
     "uuid": "^11.1.0",
     "dotenv": "^16.4.0",

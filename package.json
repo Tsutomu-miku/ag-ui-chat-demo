@@ -7,7 +7,10 @@
     "dev:server": "pnpm --filter ag-ui-chat-server run dev",
     "dev:client": "pnpm --filter ag-ui-chat-client run dev",
     "lint": "pnpm --filter ag-ui-chat-server run lint",
-    "build": "pnpm --filter ag-ui-chat-client run build"
+    "build": "pnpm --filter ag-ui-chat-client run build",
+    "test": "pnpm -r run test",
+    "test:packages": "pnpm --filter ag-ui-langchain --filter ag-ui-hono run test",
+    "typecheck": "pnpm -r run typecheck"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

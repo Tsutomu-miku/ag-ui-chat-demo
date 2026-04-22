@@ -1,3 +1,11 @@
+/**
+ * LangGraph Agent — refactored to use ag-ui-langchain package.
+ *
+ * The core streaming, conversion, and tool utilities are now imported
+ * from the reusable package. This file contains only the demo-specific
+ * agent configuration (supervisor prompt, sub-agent wiring).
+ */
+
 import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import {
   AIMessage,
@@ -11,17 +19,20 @@ import { v4 as uuid } from "uuid";
 
 import { createLogger } from "../../config/logger.js";
 import {
+  // Re-export stream utilities from package
+  eventsFromAIMessageStream,
+  withStreamEventMetadata,
+  eventsFromToolMessage,
+  toAIMessage,
+  // Conversion utilities
   asArray,
   contentToString,
   frontendToolToModelTool,
   getToolCalls,
   toLangChainMessages,
-} from "./langgraph-utils.js";
-import {
-  eventsFromAIMessageStream,
-  withStreamEventMetadata,
+  // Types
   type StreamEventMetadata,
-} from "./langgraph-stream.js";
+} from "ag-ui-langchain";
 import { backendTools } from "./tools.js";
 import {
   researcherTools,
@@ -32,45 +43,8 @@ import { createAgentModel } from "./model.js";
 
 const logger = createLogger("langgraph");
 
-export { eventsFromAIMessageStream } from "./langgraph-stream.js";
-
-// ============================================================
-// Shared helpers
-// ============================================================
-
-export async function* eventsFromToolMessage(
-  message: BaseMessage,
-  metadata: StreamEventMetadata = {},
-): AsyncGenerator<BaseEvent> {
-  const toolMessage = message as ToolMessage;
-  const toolCallId = toolMessage.tool_call_id;
-
-  if (!toolCallId) return;
-
-  yield withStreamEventMetadata(
-    {
-      type: EventType.TOOL_CALL_RESULT,
-      messageId: message.id || uuid(),
-      toolCallId,
-      content: contentToString(message.content),
-      role: "tool",
-    } as BaseEvent,
-    metadata,
-  );
-}
-
-export function toAIMessage(chunk: AIMessageChunk) {
-  return new AIMessage({
-    id: chunk.id,
-    content: contentToString(chunk.content),
-    tool_calls: (chunk.tool_calls || []).map((toolCall) => ({
-      id: toolCall.id,
-      name: toolCall.name,
-      args: toolCall.args,
-      type: "tool_call",
-    })),
-  });
-}
+// Re-export for backward compatibility with existing tests
+export { eventsFromAIMessageStream, eventsFromToolMessage, toAIMessage };
 
 // ============================================================
 // Sub-agent runner

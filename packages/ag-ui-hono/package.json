@@ -1,0 +1,35 @@
+{
+  "name": "ag-ui-hono",
+  "version": "0.1.0",
+  "description": "AG-UI protocol HTTP endpoint adapter for Hono — aligned with Python add_langgraph_fastapi_endpoint",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ag-ui/core": "^0.0.52",
+    "@ag-ui/encoder": "^0.0.52",
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.4",
+    "@types/node": "^22.0.0"
+  },
+  "peerDependencies": {
+    "hono": ">=4.0.0"
+  },
+  "files": ["dist"],
+  "license": "MIT"
+}

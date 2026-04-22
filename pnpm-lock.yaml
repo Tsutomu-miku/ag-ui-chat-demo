@@ -55,6 +55,56 @@ importers:
         specifier: ^6.3.0
         version: 6.4.2(@types/node@22.19.17)(tsx@4.21.0)
 
+  packages/ag-ui-hono:
+    dependencies:
+      '@ag-ui/core':
+        specifier: ^0.0.52
+        version: 0.0.52
+      '@ag-ui/encoder':
+        specifier: ^0.0.52
+        version: 0.0.52
+      hono:
+        specifier: ^4.7.0
+        version: 4.12.14
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.17)(tsx@4.21.0)
+
+  packages/ag-ui-langchain:
+    dependencies:
+      '@ag-ui/core':
+        specifier: ^0.0.52
+        version: 0.0.52
+      '@langchain/core':
+        specifier: ^0.3.80
+        version: 0.3.80(openai@5.23.2(zod@3.25.76))
+      '@langchain/langgraph':
+        specifier: ^0.2.60
+        version: 0.2.74(@langchain/core@0.3.80(openai@5.23.2(zod@3.25.76)))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(zod-to-json-schema@3.25.2(zod@3.25.76))
+      uuid:
+        specifier: ^11.1.0
+        version: 11.1.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      '@types/uuid':
+        specifier: ^10.0.0
+        version: 10.0.0
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.17)(tsx@4.21.0)
+
   server:
     dependencies:
       '@ag-ui/client':
@@ -81,6 +131,12 @@ importers:
       '@langchain/openai':
         specifier: ^0.5.0
         version: 0.5.18(@langchain/core@0.3.80(openai@5.23.2(zod@3.25.76)))
+      ag-ui-hono:
+        specifier: workspace:*
+        version: link:../packages/ag-ui-hono
+      ag-ui-langchain:
+        specifier: workspace:*
+        version: link:../packages/ag-ui-langchain
       dotenv:
         specifier: ^16.4.0
         version: 16.6.1
