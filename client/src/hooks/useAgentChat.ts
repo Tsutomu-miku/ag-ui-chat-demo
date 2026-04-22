@@ -131,9 +131,6 @@ export function useAgentChat({
       // Build the subscriber that drives React state
       const subscriber: AgentSubscriber = {
         // --- Text streaming ---
-        // Each SSE chunk fires this callback with the accumulated buffer,
-        // so the UI updates character-by-character naturally — no manual
-        // reveal queue needed.
         onTextMessageStartEvent: ({ event }) => {
           activeAssistantMessageId = event.messageId;
           emitThreadEvent(threadId, {
@@ -210,6 +207,21 @@ export function useAgentChat({
           });
         },
 
+        // --- Step lifecycle (sub-agent execution) ---
+        onStepStartedEvent: ({ event }) => {
+          emitThreadEvent(threadId, {
+            type: "step_started",
+            stepName: event.stepName,
+          });
+        },
+
+        onStepFinishedEvent: ({ event }) => {
+          emitThreadEvent(threadId, {
+            type: "step_finished",
+            stepName: event.stepName,
+          });
+        },
+
         // --- Run lifecycle ---
         onRunFinalized: async () => {
           emitThreadEvent(threadId, {
@@ -257,11 +269,6 @@ export function useAgentChat({
 
   /**
    * Resolve a frontend tool call after user interaction.
-   *
-   * This is the AG-UI multi-turn protocol:
-   * 1. First request  → agent returns TOOL_CALL events for a frontend tool
-   * 2. Frontend shows UI → user interacts
-   * 3. Second request → sends the tool result; backend hydrates prior messages
    */
   const resolveToolCall = useCallback(
     async (

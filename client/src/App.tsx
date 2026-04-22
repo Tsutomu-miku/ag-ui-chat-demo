@@ -20,7 +20,14 @@ export default function App() {
       />
       <ChatPanel
         thread={threads.active}
-        threadActions={threads}
+        threadActions={{
+          ensureActiveThread: threads.ensureActiveThread,
+          refreshList: threads.refreshList,
+          appendMessage: threads.appendMessage,
+          appendToolResult: threads.appendToolResult,
+          handleThreadEvent: threads.handleThreadEvent,
+          activeSteps: threads.activeSteps,
+        }}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
       />

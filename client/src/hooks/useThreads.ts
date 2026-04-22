@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import type {
+  ActiveStep,
   ChatMessage,
   ChatThread,
   ThreadAgentEvent,
@@ -196,6 +197,11 @@ export function updateMessagesWithAgentEvent(
         };
       });
 
+    // Step events don't affect messages — handled separately via activeSteps
+    case "step_started":
+    case "step_finished":
+      return messages;
+
     case "run_complete":
       return messages.map((message) =>
         message.isStreaming
@@ -212,6 +218,7 @@ export function useThreads() {
   const [list, setList] = useState<ThreadSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [active, setActive] = useState<ChatThread | null>(null);
+  const [activeSteps, setActiveSteps] = useState<ActiveStep[]>([]);
 
   const setActiveThread = useCallback((thread: ChatThread | null) => {
     setActive(thread);
@@ -288,6 +295,21 @@ export function useThreads() {
 
   const handleThreadEvent = useCallback(
     (threadId: string, event: ThreadAgentEvent) => {
+      // Handle step events via dedicated state
+      if (event.type === "step_started") {
+        setActiveSteps((prev) => [
+          ...prev,
+          { stepName: event.stepName, startedAt: now() },
+        ]);
+      } else if (event.type === "step_finished") {
+        setActiveSteps((prev) =>
+          prev.filter((s) => s.stepName !== event.stepName),
+        );
+      } else if (event.type === "run_complete") {
+        setActiveSteps([]);
+      }
+
+      // Update messages
       updateActiveThread((thread) => {
         if (thread.id !== threadId) {
           return thread;
@@ -349,6 +371,7 @@ export function useThreads() {
     list,
     active,
     activeId,
+    activeSteps,
     create,
     ensureActiveThread,
     select,

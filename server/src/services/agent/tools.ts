@@ -135,7 +135,7 @@ function evaluateMathExpression(expression: string): number {
   return values[0];
 }
 
-const getWeather = tool(
+export const getWeather = tool(
   async ({ city }: { city: string }) => {
     const conditions = ["Sunny", "Cloudy", "Rainy", "Partly Cloudy", "Windy"];
     const temp = Math.floor(Math.random() * 35) + 5;
@@ -159,7 +159,7 @@ const getWeather = tool(
   }
 );
 
-const searchWeb = tool(
+export const searchWeb = tool(
   async ({ query }: { query: string }) => {
     return JSON.stringify({
       query,
@@ -190,7 +190,7 @@ const searchWeb = tool(
   }
 );
 
-const calculate = tool(
+export const calculate = tool(
   async ({ expression }: { expression: string }) => {
     try {
       const result = evaluateMathExpression(expression);
@@ -209,7 +209,7 @@ const calculate = tool(
   }
 );
 
-const getCurrentTime = tool(
+export const getCurrentTime = tool(
   async () => {
     const now = new Date();
 

@@ -22,6 +22,8 @@
   --tool-backend-border: #2a3a4a;
   --tool-frontend-bg: #2a1f33;
   --tool-frontend-border: #4a3060;
+  --tool-delegation-bg: #1f2a1a;
+  --tool-delegation-border: #3a5030;
   --sidebar-width: 260px;
   --header-height: 56px;
   --content-max-width: 768px;
@@ -259,6 +261,7 @@ body {
 
 .tool-call.backend { background: var(--tool-backend-bg); border: 1px solid var(--tool-backend-border); }
 .tool-call.frontend { background: var(--tool-frontend-bg); border: 1px solid var(--tool-frontend-border); }
+.tool-call.delegation { background: var(--tool-delegation-bg); border: 1px solid var(--tool-delegation-border); }
 .tool-call.unknown { background: var(--bg-tertiary); border: 1px solid var(--border-color); }
 
 .tool-call.streaming { box-shadow: 0 0 0 1px var(--accent), 0 0 12px rgba(16, 163, 127, 0.15); }
@@ -266,6 +269,7 @@ body {
 .tool-call-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 500; }
 .tool-icon { font-size: 14px; }
 .tool-name { color: var(--text-primary); font-family: var(--font-mono); font-size: 13px; }
+.tool-section-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 4px; font-weight: 600; }
 
 .tool-type-badge {
   font-size: 10px;
@@ -277,6 +281,7 @@ body {
 }
 .tool-type-badge.backend { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
 .tool-type-badge.frontend { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
+.tool-type-badge.delegation { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
 
 .tool-spinner {
   width: 14px; height: 14px;
@@ -301,6 +306,56 @@ body {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* ===== STEP INDICATOR (Sub-agent execution) ===== */
+.step-indicator {
+  max-width: var(--content-max-width);
+  margin: 0 auto 16px;
+  padding: 0 16px;
+  animation: slideUp 0.3s ease;
+}
+
+.step-indicator-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, rgba(16, 163, 127, 0.08), rgba(59, 130, 246, 0.08));
+  border: 1px solid rgba(16, 163, 127, 0.25);
+  border-radius: 12px;
+}
+
+.step-icon { font-size: 20px; flex-shrink: 0; }
+
+.step-info { flex: 1; min-width: 0; }
+
+.step-trail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.step-parent { color: var(--text-muted); }
+.step-current { color: var(--accent); }
+.step-arrow { color: var(--text-muted); font-size: 12px; margin: 0 2px; }
+
+.step-description {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.step-indicator .step-spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(16, 163, 127, 0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
 }
 
 /* ===== FRONTEND TOOL UI ===== */
@@ -498,4 +553,5 @@ body {
   .sidebar { position: fixed; left: 0; top: 0; z-index: 100; box-shadow: 4px 0 24px rgba(0,0,0,0.5); }
   .tool-calls, .frontend-tool-ui { padding: 0 16px; }
   .feature-grid { grid-template-columns: 1fr; }
+  .step-indicator { padding: 0 8px; }
 }

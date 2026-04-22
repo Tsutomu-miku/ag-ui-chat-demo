@@ -61,6 +61,15 @@ export interface PendingToolCall {
   result?: string;
 }
 
+// ============================================================
+// Step tracking for sub-agent execution
+// ============================================================
+
+export interface ActiveStep {
+  stepName: string;
+  startedAt: string;
+}
+
 export type ThreadAgentEvent =
   | {
       type: "append_message";
@@ -93,6 +102,14 @@ export type ThreadAgentEvent =
   | {
       type: "tool_end";
       toolCallId: string;
+    }
+  | {
+      type: "step_started";
+      stepName: string;
+    }
+  | {
+      type: "step_finished";
+      stepName: string;
     }
   | {
       type: "run_complete";
