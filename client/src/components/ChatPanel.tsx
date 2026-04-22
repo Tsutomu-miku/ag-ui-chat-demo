@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAgentChat } from "../hooks/useAgentChat";
+import { FRONTEND_TOOLS } from "../hooks/useAgentChat";
 import { MessageBubble } from "./MessageBubble";
 import { FrontendToolUI } from "./FrontendToolUI";
 import { ExecutionTree } from "./ExecutionTree";
@@ -70,6 +71,7 @@ export function ChatPanel({
     isStreaming,
     pendingToolCalls,
   } = useAgentChat({
+    frontendTools: FRONTEND_TOOLS,
     onThreadEvent: threadActions.handleThreadEvent,
   });
 
