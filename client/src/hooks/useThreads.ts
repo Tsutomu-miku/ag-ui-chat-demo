@@ -68,13 +68,14 @@ export function useThreads() {
   );
 
   // Refresh active thread from server (after agent run completes)
-  const refreshActive = useCallback(async () => {
-    if (!activeId) return;
+  const refreshActive = useCallback(async (threadId = activeId) => {
+    if (!threadId) return;
     try {
-      const res = await fetch(`${API}/threads/${activeId}`);
+      const res = await fetch(`${API}/threads/${threadId}`);
       if (res.ok) {
         const thread = await res.json();
         setActive(thread);
+        setActiveId(thread.id);
       }
     } catch (e) {
       console.error("Failed to refresh thread:", e);

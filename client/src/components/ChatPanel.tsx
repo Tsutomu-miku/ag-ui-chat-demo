@@ -10,7 +10,7 @@ interface ChatPanelProps {
   thread: ChatThread | null;
   threadActions: {
     create: () => Promise<string>;
-    refreshActive: () => Promise<void>;
+    refreshActive: (threadId?: string) => Promise<void>;
     addLocalMessage: (msg: ChatThread["messages"][0]) => void;
   };
   sidebarOpen: boolean;
@@ -82,7 +82,7 @@ export function ChatPanel({
       async () => {
         // Called when agent run completes (no pending frontend tools)
         // Refresh from server to get the persisted messages
-        await threadActions.refreshActive();
+        await threadActions.refreshActive(threadId);
       }
     );
   }, [input, isStreaming, thread, threadActions, sendMessage]);
@@ -90,10 +90,10 @@ export function ChatPanel({
   const handleToolResult = useCallback(
     async (toolCallId: string, result: string) => {
       await resolveToolCall(toolCallId, result, async () => {
-        await threadActions.refreshActive();
+        await threadActions.refreshActive(thread?.id);
       });
     },
-    [resolveToolCall, threadActions]
+    [resolveToolCall, threadActions, thread?.id]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

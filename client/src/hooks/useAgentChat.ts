@@ -67,6 +67,8 @@ interface UseAgentChatOptions {
   agentUrl?: string;
 }
 
+const STREAM_REVEAL_INTERVAL_MS = 12;
+
 export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
@@ -96,7 +98,10 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const parts = buffer.split("\n\n");
@@ -110,6 +115,15 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
         } catch {
           // skip malformed events
         }
+      }
+    }
+
+    const trimmed = buffer.trim();
+    if (trimmed.startsWith("data: ")) {
+      try {
+        yield JSON.parse(trimmed.slice(6));
+      } catch {
+        // skip malformed event
       }
     }
   };
@@ -138,12 +152,79 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
       // Save context for potential multi-turn frontend tool calls
       runContextRef.current = { threadId };
 
-      let fullContent = "";
-      let currentMessageId = "";
+      let revealedContent = "";
+      let queuedCharacters: string[] = [];
+      let revealTimer: ReturnType<typeof setTimeout> | null = null;
+      let resolveRevealIdle: (() => void) | null = null;
+      let revealIdlePromise = Promise.resolve();
       const toolCalls: Array<{ id: string; name: string; args: string; complete: boolean }> = [];
       const toolCallArgsMap = new Map<string, string>();
       const frontendToolNames = new Set(FRONTEND_TOOLS.map((t) => t.name));
       const pendingFrontend: PendingToolCall[] = [];
+
+      function ensureRevealIdlePromise() {
+        if (!resolveRevealIdle) {
+          revealIdlePromise = new Promise<void>((resolve) => {
+            resolveRevealIdle = resolve;
+          });
+        }
+      }
+
+      function resolveRevealIfDone() {
+        if (queuedCharacters.length === 0 && !revealTimer && resolveRevealIdle) {
+          resolveRevealIdle();
+          resolveRevealIdle = null;
+        }
+      }
+
+      function revealNextCharacter() {
+        revealTimer = null;
+
+        const next = queuedCharacters.shift();
+        if (next !== undefined) {
+          revealedContent += next;
+          setStreamingContent(revealedContent);
+        }
+
+        if (queuedCharacters.length > 0) {
+          scheduleReveal();
+        } else {
+          resolveRevealIfDone();
+        }
+      }
+
+      function scheduleReveal() {
+        if (revealTimer || queuedCharacters.length === 0) return;
+
+        ensureRevealIdlePromise();
+        revealTimer = setTimeout(revealNextCharacter, STREAM_REVEAL_INTERVAL_MS);
+      }
+
+      function appendStreamingDelta(delta: string) {
+        if (!delta) return;
+
+        queuedCharacters.push(...Array.from(delta));
+        ensureRevealIdlePromise();
+        scheduleReveal();
+      }
+
+      async function waitForStreamingReveal() {
+        if (queuedCharacters.length === 0 && !revealTimer) return;
+        await revealIdlePromise;
+      }
+
+      function cancelStreamingReveal() {
+        if (revealTimer) {
+          clearTimeout(revealTimer);
+          revealTimer = null;
+        }
+
+        queuedCharacters = [];
+        if (resolveRevealIdle) {
+          resolveRevealIdle();
+          resolveRevealIdle = null;
+        }
+      }
 
       try {
         const response = await fetch(agentUrl, {
@@ -176,12 +257,11 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
               break;
 
             case "TEXT_MESSAGE_START":
-              currentMessageId = event.messageId || uuid();
               break;
 
             case "TEXT_MESSAGE_CONTENT":
-              fullContent += event.delta || "";
-              setStreamingContent(fullContent);
+            case "TEXT_MESSAGE_CHUNK":
+              appendStreamingDelta(event.delta || event.content || "");
               break;
 
             case "TEXT_MESSAGE_END":
@@ -241,6 +321,8 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
           }
         }
 
+        await waitForStreamingReveal();
+
         // If there are pending frontend tool calls, set them for the UI
         if (pendingFrontend.length > 0) {
           setPendingToolCalls(pendingFrontend);
@@ -254,6 +336,7 @@ export function useAgentChat({ agentUrl = "/api/agent" }: UseAgentChatOptions = 
           console.error("[AG-UI] Stream error:", error);
         }
       } finally {
+        cancelStreamingReveal();
         setIsStreaming(false);
         setStreamingContent("");
         setStreamingToolCalls([]);
