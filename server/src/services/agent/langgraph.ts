@@ -7,6 +7,7 @@ import {
 } from "@ag-ui/core";
 import {
   AIMessage,
+  AIMessageChunk,
   HumanMessage,
   SystemMessage,
   ToolMessage,
@@ -14,7 +15,6 @@ import {
   type MessageContent,
 } from "@langchain/core/messages";
 import { type BindToolsInput } from "@langchain/core/language_models/chat_models";
-import { END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { v4 as uuid } from "uuid";
 
@@ -29,11 +29,6 @@ type LangChainToolCall = {
   name: string;
   args?: Record<string, unknown>;
 };
-
-type GraphUpdate = Partial<{
-  agent: { messages?: BaseMessage | BaseMessage[] };
-  tools: { messages?: BaseMessage | BaseMessage[] };
-}>;
 
 function contentToString(content: Message["content"] | MessageContent | undefined): string {
   if (!content) return "";
@@ -128,94 +123,7 @@ function asArray<T>(value: T | T[] | undefined): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
-function createAgentGraph(frontendTools: Tool[]) {
-  const frontendToolNames = new Set(frontendTools.map((tool) => tool.name));
-  const frontendModelTools = frontendTools.map(frontendToolToModelTool);
-  const toolNode = new ToolNode(backendTools);
-
-  const callModel = async (state: typeof MessagesAnnotation.State) => {
-    const model = createAgentModel();
-    const response = await model
-      .bindTools([...backendTools, ...frontendModelTools])
-      .invoke(state.messages);
-
-    return { messages: [response] };
-  };
-
-  const shouldContinue = (state: typeof MessagesAnnotation.State) => {
-    const lastMessage = state.messages[state.messages.length - 1];
-    const toolCalls = getToolCalls(lastMessage);
-
-    if (toolCalls.length === 0) return END;
-
-    const hasFrontendToolCall = toolCalls.some((toolCall) =>
-      frontendToolNames.has(toolCall.name)
-    );
-
-    if (hasFrontendToolCall) return END;
-
-    return "tools";
-  };
-
-  return new StateGraph(MessagesAnnotation)
-    .addNode("agent", callModel)
-    .addNode("tools", toolNode)
-    .addEdge(START, "agent")
-    .addConditionalEdges("agent", shouldContinue, {
-      tools: "tools",
-      [END]: END,
-    })
-    .addEdge("tools", "agent")
-    .compile();
-}
-
-async function* eventsFromAIMessage(message: BaseMessage): AsyncGenerator<BaseEvent> {
-  const messageId = message.id || uuid();
-  const content = contentToString(message.content);
-  const toolCalls = getToolCalls(message);
-
-  if (content) {
-    yield {
-      type: EventType.TEXT_MESSAGE_START,
-      messageId,
-      role: "assistant",
-    } as BaseEvent;
-    yield {
-      type: EventType.TEXT_MESSAGE_CONTENT,
-      messageId,
-      delta: content,
-    } as BaseEvent;
-  }
-
-  for (const toolCall of toolCalls) {
-    const toolCallId = toolCall.id || uuid();
-
-    yield {
-      type: EventType.TOOL_CALL_START,
-      parentMessageId: messageId,
-      toolCallId,
-      toolCallName: toolCall.name,
-    } as BaseEvent;
-    yield {
-      type: EventType.TOOL_CALL_ARGS,
-      toolCallId,
-      delta: JSON.stringify(toolCall.args || {}),
-    } as BaseEvent;
-    yield {
-      type: EventType.TOOL_CALL_END,
-      toolCallId,
-    } as BaseEvent;
-  }
-
-  if (content) {
-    yield {
-      type: EventType.TEXT_MESSAGE_END,
-      messageId,
-    } as BaseEvent;
-  }
-}
-
-async function* eventsFromToolMessage(message: BaseMessage): AsyncGenerator<BaseEvent> {
+export async function* eventsFromToolMessage(message: BaseMessage): AsyncGenerator<BaseEvent> {
   const toolMessage = message as ToolMessage;
   const toolCallId = toolMessage.tool_call_id;
 
@@ -230,26 +138,165 @@ async function* eventsFromToolMessage(message: BaseMessage): AsyncGenerator<Base
   } as BaseEvent;
 }
 
-async function* eventsFromGraphUpdate(update: GraphUpdate): AsyncGenerator<BaseEvent> {
-  for (const message of asArray(update.agent?.messages)) {
-    if (message._getType() === "ai") {
-      yield* eventsFromAIMessage(message);
+export async function* eventsFromAIMessageStream(
+  stream: AsyncIterable<BaseMessage>
+): AsyncGenerator<BaseEvent, AIMessageChunk | undefined> {
+  let messageId: string | undefined;
+  let started = false;
+  let textClosed = false;
+  let finalChunk: AIMessageChunk | undefined;
+  let fallbackToolCallIndex = 0;
+  const toolCallStates = new Map<
+    string,
+    {
+      emittedId: string;
+      name: string;
+      args: string;
+      started: boolean;
+      ended: boolean;
+    }
+  >();
+
+  for await (const chunk of stream) {
+    if (!(chunk instanceof AIMessageChunk)) {
+      continue;
+    }
+
+    finalChunk = finalChunk ? finalChunk.concat(chunk) : chunk;
+    messageId ||= chunk.id || uuid();
+
+    const textDelta = contentToString(chunk.content);
+    if (textDelta) {
+      if (!started) {
+        started = true;
+        yield {
+          type: EventType.TEXT_MESSAGE_START,
+          messageId,
+          role: "assistant",
+        } as BaseEvent;
+      }
+
+      if (textClosed && messageId) {
+        yield {
+          type: EventType.TEXT_MESSAGE_START,
+          messageId,
+          role: "assistant",
+        } as BaseEvent;
+        textClosed = false;
+      }
+
+      yield {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId,
+        delta: textDelta,
+      } as BaseEvent;
+    }
+
+    for (const toolCallChunk of chunk.tool_call_chunks || []) {
+      const stateKey =
+        typeof toolCallChunk.index === "number"
+          ? `index:${toolCallChunk.index}`
+          : toolCallChunk.id
+            ? `id:${toolCallChunk.id}`
+            : `fallback:${fallbackToolCallIndex++}`;
+      const state = toolCallStates.get(stateKey) || {
+        emittedId: toolCallChunk.id || uuid(),
+        name: toolCallChunk.name || "unknown_tool",
+        args: "",
+        started: false,
+        ended: false,
+      };
+      const toolCallId = state.emittedId;
+
+      if (started && !textClosed && messageId) {
+        yield {
+          type: EventType.TEXT_MESSAGE_END,
+          messageId,
+        } as BaseEvent;
+        textClosed = true;
+      }
+
+      if (toolCallChunk.name) {
+        state.name = toolCallChunk.name;
+      }
+
+      if (toolCallChunk.id && state.emittedId !== toolCallChunk.id) {
+        state.emittedId = toolCallChunk.id;
+      }
+
+      if (!state.started) {
+        state.started = true;
+        yield {
+          type: EventType.TOOL_CALL_START,
+          parentMessageId: messageId,
+          toolCallId,
+          toolCallName: state.name,
+        } as BaseEvent;
+      }
+
+      if (toolCallChunk.args) {
+        state.args += toolCallChunk.args;
+        yield {
+          type: EventType.TOOL_CALL_ARGS,
+          toolCallId,
+          delta: toolCallChunk.args,
+        } as BaseEvent;
+      }
+
+      toolCallStates.set(stateKey, state);
     }
   }
 
-  for (const message of asArray(update.tools?.messages)) {
-    if (message._getType() === "tool") {
-      yield* eventsFromToolMessage(message);
+  if (finalChunk) {
+    for (const toolCall of finalChunk.tool_calls || []) {
+      const toolCallId = toolCall.id || uuid();
+      const state = Array.from(toolCallStates.values()).find(
+        (item) => item.emittedId === toolCallId
+      );
+
+      if (state && !state.ended) {
+        state.ended = true;
+        yield {
+          type: EventType.TOOL_CALL_END,
+          toolCallId,
+        } as BaseEvent;
+      }
     }
   }
+
+  if (started && messageId && !textClosed) {
+    yield {
+      type: EventType.TEXT_MESSAGE_END,
+      messageId,
+    } as BaseEvent;
+  }
+
+  return finalChunk;
+}
+
+export function toAIMessage(chunk: AIMessageChunk) {
+  return new AIMessage({
+    id: chunk.id,
+    content: contentToString(chunk.content),
+    tool_calls: (chunk.tool_calls || []).map((toolCall) => ({
+      id: toolCall.id,
+      name: toolCall.name,
+      args: toolCall.args,
+      type: "tool_call",
+    })),
+  });
 }
 
 export async function* runLangGraphAgent(
   input: RunAgentInput,
   signal?: AbortSignal
 ): AsyncGenerator<BaseEvent> {
-  const graph = createAgentGraph(input.tools || []);
   const messages = toLangChainMessages(input.messages);
+  const frontendTools = input.tools || [];
+  const frontendToolNames = new Set(frontendTools.map((tool) => tool.name));
+  const frontendModelTools = frontendTools.map(frontendToolToModelTool);
+  const toolNode = new ToolNode(backendTools);
+  const stateMessages = [...messages];
 
   yield {
     type: EventType.RUN_STARTED,
@@ -264,18 +311,38 @@ export async function* runLangGraphAgent(
     frontendToolCount: input.tools?.length || 0,
   });
 
-  const stream = await graph.stream(
-    { messages },
-    {
-      streamMode: "updates",
-      signal,
-      configurable: { thread_id: input.threadId },
-    } as Parameters<typeof graph.stream>[1]
-  );
+  while (!signal?.aborted) {
+    const boundModel = createAgentModel().bindTools([
+      ...backendTools,
+      ...frontendModelTools,
+    ]);
 
-  for await (const update of stream) {
-    if (signal?.aborted) break;
-    yield* eventsFromGraphUpdate(update as GraphUpdate);
+    const aiResponseStream = await boundModel.stream(stateMessages, { signal });
+    const finalChunk = yield* eventsFromAIMessageStream(aiResponseStream);
+
+    if (!finalChunk) {
+      break;
+    }
+
+    const finalMessage = toAIMessage(finalChunk);
+    stateMessages.push(finalMessage);
+
+    const toolCalls = getToolCalls(finalMessage);
+    if (toolCalls.length === 0) {
+      break;
+    }
+
+    if (toolCalls.some((toolCall) => frontendToolNames.has(toolCall.name))) {
+      break;
+    }
+
+    const toolResult = await toolNode.invoke({ messages: stateMessages });
+    for (const message of asArray(toolResult.messages)) {
+      stateMessages.push(message);
+      if (message._getType() === "tool") {
+        yield* eventsFromToolMessage(message);
+      }
+    }
   }
 
   if (!signal?.aborted) {

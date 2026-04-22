@@ -3,6 +3,7 @@ interface ToolCall {
   name: string;
   args: string;
   complete: boolean;
+  result?: string;
 }
 
 interface Props {
@@ -38,7 +39,16 @@ export function ToolCallDisplay({ toolCalls, isStreaming }: Props) {
               {tc.complete && <span className="tool-check">✓</span>}
             </div>
             {tc.args && (
-              <pre className="tool-args">{formatJSON(tc.args)}</pre>
+              <>
+                <div className="tool-section-label">Input</div>
+                <pre className="tool-args">{formatJSON(tc.args)}</pre>
+              </>
+            )}
+            {tc.result && (
+              <>
+                <div className="tool-section-label">Output</div>
+                <pre className="tool-args">{formatJSON(tc.result)}</pre>
+              </>
             )}
           </div>
         );

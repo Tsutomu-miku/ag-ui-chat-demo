@@ -27,7 +27,9 @@ agentRouter.post("/", async (c) => {
     return c.json({ error: "Invalid request body" }, 400);
   }
 
-  const encoder = new EventEncoder({ accept: c.req.header("Accept") || undefined });
+  const encoder = new EventEncoder({
+    accept: c.req.header("Accept") || undefined,
+  });
   const messages = buildMessagesWithHistory(input.threadId, input.messages);
   const runInput: RunAgentInput = { ...input, messages };
 
@@ -53,7 +55,10 @@ agentRouter.post("/", async (c) => {
     });
 
     try {
-      for await (const event of runLangGraphAgent(runInput, abortController.signal)) {
+      for await (const event of runLangGraphAgent(
+        runInput,
+        abortController.signal,
+      )) {
         if (abortController.signal.aborted) break;
 
         events.push(event);

@@ -9,6 +9,7 @@ export interface ToolCallFunction {
     name: string;
     arguments: string;
   };
+  complete?: boolean;
 }
 
 export interface ChatMessage {
@@ -17,6 +18,7 @@ export interface ChatMessage {
   content: string;
   toolCallId?: string;
   toolCalls?: ToolCallFunction[];
+  isStreaming?: boolean;
   createdAt: string;
 }
 
@@ -58,3 +60,40 @@ export interface PendingToolCall {
   status: "pending" | "approved" | "rejected";
   result?: string;
 }
+
+export type ThreadAgentEvent =
+  | {
+      type: "append_message";
+      message: ChatMessage;
+    }
+  | {
+      type: "assistant_start";
+      messageId: string;
+    }
+  | {
+      type: "assistant_delta";
+      messageId: string;
+      delta: string;
+    }
+  | {
+      type: "assistant_end";
+      messageId: string;
+    }
+  | {
+      type: "tool_start";
+      parentMessageId: string;
+      toolCallId: string;
+      toolCallName: string;
+    }
+  | {
+      type: "tool_args";
+      toolCallId: string;
+      args: string;
+    }
+  | {
+      type: "tool_end";
+      toolCallId: string;
+    }
+  | {
+      type: "run_complete";
+    };

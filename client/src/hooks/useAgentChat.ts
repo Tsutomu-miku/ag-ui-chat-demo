@@ -2,7 +2,11 @@ import { useState, useCallback, useRef, useMemo } from "react";
 import { v4 as uuid } from "uuid";
 import { HttpAgent } from "@ag-ui/client";
 import type { AgentSubscriber } from "@ag-ui/client";
-import type { FrontendToolDefinition, PendingToolCall } from "../types";
+import type {
+  FrontendToolDefinition,
+  PendingToolCall,
+  ThreadAgentEvent,
+} from "../types";
 
 // ============================================================
 // Frontend Tool Definitions
@@ -60,24 +64,14 @@ export const FRONTEND_TOOLS: FrontendToolDefinition[] = [
 
 interface UseAgentChatOptions {
   agentUrl?: string;
+  onThreadEvent?: (threadId: string, event: ThreadAgentEvent) => void;
 }
 
-/** Streaming tool-call state exposed to the UI layer. */
-interface StreamingToolCall {
-  id: string;
-  name: string;
-  args: string;
-  complete: boolean;
-}
-
-export function useAgentChat(
-  { agentUrl = "/api/agent" }: UseAgentChatOptions = {},
-) {
+export function useAgentChat({
+  agentUrl = "/api/agent",
+  onThreadEvent,
+}: UseAgentChatOptions = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingContent, setStreamingContent] = useState("");
-  const [streamingToolCalls, setStreamingToolCalls] = useState<
-    StreamingToolCall[]
-  >([]);
   const [pendingToolCalls, setPendingToolCalls] = useState<PendingToolCall[]>(
     [],
   );
@@ -94,6 +88,13 @@ export function useAgentChat(
     [],
   );
 
+  const emitThreadEvent = useCallback(
+    (threadId: string, event: ThreadAgentEvent) => {
+      onThreadEvent?.(threadId, event);
+    },
+    [onThreadEvent],
+  );
+
   /**
    * Send a message to the AG-UI agent endpoint.
    *
@@ -108,16 +109,13 @@ export function useAgentChat(
       onComplete: () => Promise<void>,
     ) => {
       setIsStreaming(true);
-      setStreamingContent("");
-      setStreamingToolCalls([]);
       setPendingToolCalls([]);
 
       // Save context for potential multi-turn frontend tool calls
       runContextRef.current = { threadId };
 
-      // Mutable accumulators scoped to this run — captured by subscriber closures
-      const toolCalls: StreamingToolCall[] = [];
       const pendingFrontend: PendingToolCall[] = [];
+      let activeAssistantMessageId: string | null = null;
 
       // Configure the agent for this run
       agent.threadId = threadId;
@@ -136,49 +134,88 @@ export function useAgentChat(
         // Each SSE chunk fires this callback with the accumulated buffer,
         // so the UI updates character-by-character naturally — no manual
         // reveal queue needed.
-        onTextMessageContentEvent: ({ textMessageBuffer }) => {
-          setStreamingContent(textMessageBuffer);
+        onTextMessageStartEvent: ({ event }) => {
+          activeAssistantMessageId = event.messageId;
+          emitThreadEvent(threadId, {
+            type: "assistant_start",
+            messageId: event.messageId,
+          });
+        },
+
+        onTextMessageContentEvent: ({ event }) => {
+          emitThreadEvent(threadId, {
+            type: "assistant_delta",
+            messageId: event.messageId,
+            delta: event.delta,
+          });
+        },
+
+        onTextMessageEndEvent: ({ event }) => {
+          emitThreadEvent(threadId, {
+            type: "assistant_end",
+            messageId: event.messageId,
+          });
         },
 
         // --- Tool call lifecycle ---
         onToolCallStartEvent: ({ event }) => {
-          toolCalls.push({
-            id: event.toolCallId,
-            name: event.toolCallName,
-            args: "",
-            complete: false,
+          const parentMessageId =
+            event.parentMessageId ||
+            activeAssistantMessageId ||
+            event.toolCallId;
+
+          emitThreadEvent(threadId, {
+            type: "tool_start",
+            parentMessageId,
+            toolCallId: event.toolCallId,
+            toolCallName: event.toolCallName,
           });
-          setStreamingToolCalls([...toolCalls]);
         },
 
         onToolCallArgsEvent: ({ event, toolCallBuffer }) => {
-          const idx = toolCalls.findIndex((t) => t.id === event.toolCallId);
-          if (idx >= 0) {
-            toolCalls[idx].args = toolCallBuffer;
-            setStreamingToolCalls([...toolCalls]);
-          }
+          emitThreadEvent(threadId, {
+            type: "tool_args",
+            toolCallId: event.toolCallId,
+            args: toolCallBuffer,
+          });
         },
 
         onToolCallEndEvent: ({ event, toolCallName, toolCallArgs }) => {
-          const idx = toolCalls.findIndex((t) => t.id === event.toolCallId);
-          if (idx >= 0) {
-            toolCalls[idx].complete = true;
-            setStreamingToolCalls([...toolCalls]);
+          emitThreadEvent(threadId, {
+            type: "tool_end",
+            toolCallId: event.toolCallId,
+          });
 
-            // Detect frontend tool calls that need user interaction
-            if (frontendToolNames.has(toolCallName)) {
-              pendingFrontend.push({
-                toolCallId: event.toolCallId,
-                toolCallName,
-                args: toolCallArgs,
-                status: "pending",
-              });
-            }
+          // Detect frontend tool calls that need user interaction
+          if (frontendToolNames.has(toolCallName)) {
+            pendingFrontend.push({
+              toolCallId: event.toolCallId,
+              toolCallName,
+              args: toolCallArgs,
+              status: "pending",
+            });
           }
+        },
+
+        onToolCallResultEvent: ({ event }) => {
+          emitThreadEvent(threadId, {
+            type: "append_message",
+            message: {
+              id: event.messageId,
+              role: "tool",
+              content: event.content,
+              toolCallId: event.toolCallId,
+              createdAt: new Date().toISOString(),
+            },
+          });
         },
 
         // --- Run lifecycle ---
         onRunFinalized: async () => {
+          emitThreadEvent(threadId, {
+            type: "run_complete",
+          });
+
           if (pendingFrontend.length > 0) {
             // Frontend tool calls detected — show UI, don't call onComplete yet
             setPendingToolCalls(pendingFrontend);
@@ -187,14 +224,17 @@ export function useAgentChat(
           }
 
           setIsStreaming(false);
-          setStreamingContent("");
-          setStreamingToolCalls([]);
         },
 
         onRunFailed: ({ error }) => {
+          emitThreadEvent(threadId, {
+            type: "run_complete",
+          });
+
           if (error.name !== "AbortError") {
             console.error("[AG-UI] Stream error:", error);
           }
+          setIsStreaming(false);
         },
       };
 
@@ -209,9 +249,10 @@ export function useAgentChat(
         );
       } catch {
         // Errors already handled by onRunFailed subscriber
+        setIsStreaming(false);
       }
     },
-    [agent, frontendToolNames],
+    [agent, emitThreadEvent, frontendToolNames],
   );
 
   /**
@@ -257,8 +298,6 @@ export function useAgentChat(
     stopStreaming,
     resolveToolCall,
     isStreaming,
-    streamingContent,
-    streamingToolCalls,
     pendingToolCalls,
   };
 }

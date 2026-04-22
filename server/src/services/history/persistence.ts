@@ -161,7 +161,9 @@ export function persistHistory(
   for (const event of events as PersistableEvent[]) {
     switch (event.type) {
       case EventType.TEXT_MESSAGE_START:
-        flushAssistant();
+        if (currentAssistant?.id && event.messageId && currentAssistant.id !== event.messageId) {
+          flushAssistant();
+        }
         ensureAssistant(event.messageId);
         break;
       case EventType.TEXT_MESSAGE_CONTENT:
@@ -169,7 +171,6 @@ export function persistHistory(
         ensureAssistant(event.messageId).content += event.delta || "";
         break;
       case EventType.TEXT_MESSAGE_END:
-        flushAssistant();
         break;
       case EventType.TOOL_CALL_START:
         if (!event.toolCallId || !event.toolCallName) break;
