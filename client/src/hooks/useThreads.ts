@@ -166,7 +166,7 @@ export function updateMessagesWithAgentEvent(
                   ...toolCall,
                   function: {
                     ...toolCall.function,
-                    arguments: event.args,
+                    arguments: `${toolCall.function.arguments}${event.delta}`,
                   },
                 }
               : toolCall,
@@ -184,16 +184,19 @@ export function updateMessagesWithAgentEvent(
           return message;
         }
 
+        const toolCalls = message.toolCalls!.map((toolCall) =>
+          toolCall.id === event.toolCallId
+            ? {
+                ...toolCall,
+                complete: true,
+              }
+            : toolCall,
+        );
+
         return {
           ...message,
-          toolCalls: message.toolCalls!.map((toolCall) =>
-            toolCall.id === event.toolCallId
-              ? {
-                  ...toolCall,
-                  complete: true,
-                }
-              : toolCall,
-          ),
+          toolCalls,
+          isStreaming: toolCalls.some((toolCall) => !toolCall.complete),
         };
       });
 

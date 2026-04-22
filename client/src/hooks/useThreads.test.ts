@@ -60,7 +60,7 @@ describe("updateMessagesWithAgentEvent", () => {
     messages = updateMessagesWithAgentEvent(messages, {
       type: "tool_args",
       toolCallId: "tool-2",
-      args: '{"action":"deploy","severity":"high"}',
+      delta: '{"action":"deploy","severity":"high"}',
     });
     messages = updateMessagesWithAgentEvent(messages, {
       type: "tool_end",
@@ -82,7 +82,33 @@ describe("updateMessagesWithAgentEvent", () => {
           complete: true,
         },
       ],
+      isStreaming: false,
     });
+  });
+
+  it("appends tool call argument deltas", () => {
+    let messages: ChatMessage[] = [];
+
+    messages = updateMessagesWithAgentEvent(messages, {
+      type: "tool_start",
+      parentMessageId: "assistant-args",
+      toolCallId: "tool-args",
+      toolCallName: "search_web",
+    });
+    messages = updateMessagesWithAgentEvent(messages, {
+      type: "tool_args",
+      toolCallId: "tool-args",
+      delta: '{"query":"hel',
+    });
+    messages = updateMessagesWithAgentEvent(messages, {
+      type: "tool_args",
+      toolCallId: "tool-args",
+      delta: 'lo"}',
+    });
+
+    expect(messages[0].toolCalls?.[0].function.arguments).toBe(
+      '{"query":"hello"}',
+    );
   });
 
   it("reuses an existing assistant message when tool calls start after text end", () => {

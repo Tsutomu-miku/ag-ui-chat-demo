@@ -169,11 +169,11 @@ export function useAgentChat({
           });
         },
 
-        onToolCallArgsEvent: ({ event, toolCallBuffer }) => {
+        onToolCallArgsEvent: ({ event }) => {
           emitThreadEvent(threadId, {
             type: "tool_args",
             toolCallId: event.toolCallId,
-            args: toolCallBuffer,
+            delta: event.delta,
           });
         },
 

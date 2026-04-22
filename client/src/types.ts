@@ -97,7 +97,7 @@ export type ThreadAgentEvent =
   | {
       type: "tool_args";
       toolCallId: string;
-      args: string;
+      delta: string;
     }
   | {
       type: "tool_end";
