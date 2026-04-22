@@ -67,6 +67,20 @@ interface UseAgentChatOptions {
   onThreadEvent?: (threadId: string, event: ThreadAgentEvent) => void;
 }
 
+type EventStepMetadata = Partial<{
+  stepName: string;
+  parentStepName: string;
+}>;
+
+function getEventStepMetadata(event: unknown): EventStepMetadata {
+  const item = event as EventStepMetadata;
+
+  return {
+    ...(item.stepName ? { stepName: item.stepName } : {}),
+    ...(item.parentStepName ? { parentStepName: item.parentStepName } : {}),
+  };
+}
+
 export function useAgentChat({
   agentUrl = "/api/agent",
   onThreadEvent,
@@ -136,6 +150,7 @@ export function useAgentChat({
           emitThreadEvent(threadId, {
             type: "assistant_start",
             messageId: event.messageId,
+            ...getEventStepMetadata(event),
           });
         },
 
@@ -166,6 +181,7 @@ export function useAgentChat({
             parentMessageId,
             toolCallId: event.toolCallId,
             toolCallName: event.toolCallName,
+            ...getEventStepMetadata(event),
           });
         },
 
@@ -190,6 +206,7 @@ export function useAgentChat({
               toolCallName,
               args: toolCallArgs,
               status: "pending",
+              ...getEventStepMetadata(event),
             });
           }
         },
@@ -202,6 +219,7 @@ export function useAgentChat({
               role: "tool",
               content: event.content,
               toolCallId: event.toolCallId,
+              ...getEventStepMetadata(event),
               createdAt: new Date().toISOString(),
             },
           });
@@ -209,16 +227,22 @@ export function useAgentChat({
 
         // --- Step lifecycle (sub-agent execution) ---
         onStepStartedEvent: ({ event }) => {
+          const { parentStepName } = getEventStepMetadata(event);
+
           emitThreadEvent(threadId, {
             type: "step_started",
             stepName: event.stepName,
+            ...(parentStepName ? { parentStepName } : {}),
           });
         },
 
         onStepFinishedEvent: ({ event }) => {
+          const { parentStepName } = getEventStepMetadata(event);
+
           emitThreadEvent(threadId, {
             type: "step_finished",
             stepName: event.stepName,
+            ...(parentStepName ? { parentStepName } : {}),
           });
         },
 

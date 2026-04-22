@@ -4,12 +4,20 @@ import { createLogger } from "../../config/logger.js";
 
 export type StoredRole = "user" | "assistant" | "tool";
 
+export type StoredToolCall = ToolCall &
+  Partial<{
+    stepName: string;
+    parentStepName: string;
+  }>;
+
 export interface StoredMessage {
   id: string;
   role: StoredRole;
   content: string;
   toolCallId?: string;
-  toolCalls?: ToolCall[];
+  toolCalls?: StoredToolCall[];
+  stepName?: string;
+  parentStepName?: string;
   createdAt: string;
 }
 

@@ -10,6 +10,8 @@ export interface ToolCallFunction {
     arguments: string;
   };
   complete?: boolean;
+  stepName?: string;
+  parentStepName?: string;
 }
 
 export interface ChatMessage {
@@ -19,6 +21,8 @@ export interface ChatMessage {
   toolCallId?: string;
   toolCalls?: ToolCallFunction[];
   isStreaming?: boolean;
+  stepName?: string;
+  parentStepName?: string;
   createdAt: string;
 }
 
@@ -58,6 +62,8 @@ export interface PendingToolCall {
   toolCallName: string;
   args: Record<string, unknown>;
   status: "pending" | "approved" | "rejected";
+  stepName?: string;
+  parentStepName?: string;
   result?: string;
 }
 
@@ -67,6 +73,7 @@ export interface PendingToolCall {
 
 export interface ActiveStep {
   stepName: string;
+  parentStepName?: string;
   startedAt: string;
 }
 
@@ -78,6 +85,8 @@ export type ThreadAgentEvent =
   | {
       type: "assistant_start";
       messageId: string;
+      stepName?: string;
+      parentStepName?: string;
     }
   | {
       type: "assistant_delta";
@@ -93,6 +102,8 @@ export type ThreadAgentEvent =
       parentMessageId: string;
       toolCallId: string;
       toolCallName: string;
+      stepName?: string;
+      parentStepName?: string;
     }
   | {
       type: "tool_args";
@@ -106,10 +117,12 @@ export type ThreadAgentEvent =
   | {
       type: "step_started";
       stepName: string;
+      parentStepName?: string;
     }
   | {
       type: "step_finished";
       stepName: string;
+      parentStepName?: string;
     }
   | {
       type: "run_complete";

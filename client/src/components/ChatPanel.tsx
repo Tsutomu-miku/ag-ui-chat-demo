@@ -1,37 +1,38 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAgentChat } from "../hooks/useAgentChat";
 import { MessageBubble } from "./MessageBubble";
-import { ToolCallDisplay } from "./ToolCallDisplay";
 import { FrontendToolUI } from "./FrontendToolUI";
-import { StepIndicator } from "./StepIndicator";
+import { ExecutionTree } from "./ExecutionTree";
 import type { ActiveStep, ChatMessage, ChatThread, ThreadAgentEvent } from "../types";
 
 function buildMessageView(messages: ChatMessage[]) {
-  const assistantToolCallIds = new Set(
-    messages.flatMap((message) =>
-      (message.toolCalls || []).map((toolCall) => toolCall.id),
-    ),
-  );
-  const toolResultById = new Map(
-    messages
-      .filter((message) => message.role === "tool" && message.toolCallId)
-      .map((message) => [message.toolCallId as string, message.content]),
-  );
-
   return {
     hasMessages: messages.length > 0,
     hasStreamingMessage: messages.some((message) => message.isStreaming),
     hasActiveToolCall: messages.some((message) =>
       message.toolCalls?.some((toolCall) => !toolCall.complete),
     ),
-    visibleMessages: messages.filter(
-      (message) =>
-        message.role !== "tool" ||
-        !message.toolCallId ||
-        !assistantToolCallIds.has(message.toolCallId),
-    ),
-    toolResultById,
   };
+}
+
+function buildConversationTurns(messages: ChatMessage[]) {
+  const turns: Array<{ id: string; user?: ChatMessage; events: ChatMessage[] }> = [];
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      turns.push({ id: message.id, user: message, events: [] });
+      continue;
+    }
+
+    const currentTurn = turns[turns.length - 1];
+    if (currentTurn) {
+      currentTurn.events.push(message);
+    } else {
+      turns.push({ id: message.id, events: [message] });
+    }
+  }
+
+  return turns;
 }
 
 interface ChatPanelProps {
@@ -143,9 +144,8 @@ export function ChatPanel({
     hasMessages,
     hasStreamingMessage,
     hasActiveToolCall,
-    visibleMessages,
-    toolResultById,
   } = buildMessageView(messages);
+  const conversationTurns = buildConversationTurns(messages);
 
   return (
     <main className="chat-panel">
@@ -244,28 +244,29 @@ export function ChatPanel({
           </div>
         )}
 
-        {visibleMessages.map((msg) => (
-          <div key={msg.id}>
-            <MessageBubble message={msg} isStreaming={msg.isStreaming} />
-            {msg.toolCalls && msg.toolCalls.length > 0 && (
-              <ToolCallDisplay
-                toolCalls={msg.toolCalls.map((tc) => ({
-                  id: tc.id,
-                  name: tc.function.name,
-                  args: tc.function.arguments,
-                  complete: tc.complete ?? true,
-                  result: toolResultById.get(tc.id),
-                }))}
-                isStreaming={msg.isStreaming}
-              />
-            )}
-          </div>
-        ))}
+        {conversationTurns.map((turn, index) => {
+          const isLatestTurn = index === conversationTurns.length - 1;
+          const shouldShowTree =
+            turn.events.length > 0 ||
+            (isLatestTurn && threadActions.activeSteps.length > 0);
 
-        {/* Step indicator — shows which agent is currently active */}
-        {threadActions.activeSteps.length > 0 && (
-          <StepIndicator steps={threadActions.activeSteps} />
-        )}
+          return (
+            <div key={turn.id}>
+              {turn.user && (
+                <MessageBubble
+                  message={turn.user}
+                  isStreaming={turn.user.isStreaming}
+                />
+              )}
+              {shouldShowTree && (
+                <ExecutionTree
+                  messages={turn.events}
+                  activeSteps={isLatestTurn ? threadActions.activeSteps : []}
+                />
+              )}
+            </div>
+          );
+        })}
 
         {isStreaming && !hasStreamingMessage && !hasActiveToolCall && threadActions.activeSteps.length === 0 && (
           <div className="message assistant">

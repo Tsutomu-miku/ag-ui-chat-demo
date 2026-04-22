@@ -23,6 +23,29 @@ type AIMessageStreamState = {
   toolCallStates: Map<string, ToolCallStreamState>;
 };
 
+export type StreamEventMetadata = Partial<{
+  stepName: string;
+  parentStepName: string;
+}>;
+
+export function withStreamEventMetadata<T extends BaseEvent>(
+  event: T,
+  metadata: StreamEventMetadata = {},
+): T {
+  const definedMetadata = Object.fromEntries(
+    Object.entries(metadata).filter(([, value]) => value !== undefined),
+  );
+
+  if (Object.keys(definedMetadata).length === 0) {
+    return event;
+  }
+
+  return {
+    ...event,
+    ...definedMetadata,
+  };
+}
+
 function createAIMessageStreamState(): AIMessageStreamState {
   return {
     started: false,
@@ -218,6 +241,7 @@ function emitFinalTextEndEvent(state: AIMessageStreamState): BaseEvent[] {
 
 export async function* eventsFromAIMessageStream(
   stream: AsyncIterable<BaseMessage>,
+  metadata: StreamEventMetadata = {},
 ): AsyncGenerator<BaseEvent, AIMessageChunk | undefined> {
   const state = createAIMessageStreamState();
 
@@ -230,22 +254,22 @@ export async function* eventsFromAIMessageStream(
 
     const textDelta = contentToString(chunk.content);
     for (const event of emitTextChunkEvents(state, textDelta)) {
-      yield event;
+      yield withStreamEventMetadata(event, metadata);
     }
 
     for (const toolCallChunk of chunk.tool_call_chunks || []) {
       for (const event of emitToolCallChunkEvents(state, toolCallChunk)) {
-        yield event;
+        yield withStreamEventMetadata(event, metadata);
       }
     }
   }
 
   for (const event of emitToolCallEndEvents(state)) {
-    yield event;
+    yield withStreamEventMetadata(event, metadata);
   }
 
   for (const event of emitFinalTextEndEvent(state)) {
-    yield event;
+    yield withStreamEventMetadata(event, metadata);
   }
 
   return state.finalChunk;

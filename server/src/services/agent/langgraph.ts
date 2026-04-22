@@ -17,7 +17,11 @@ import {
   getToolCalls,
   toLangChainMessages,
 } from "./langgraph-utils.js";
-import { eventsFromAIMessageStream } from "./langgraph-stream.js";
+import {
+  eventsFromAIMessageStream,
+  withStreamEventMetadata,
+  type StreamEventMetadata,
+} from "./langgraph-stream.js";
 import { backendTools } from "./tools.js";
 import {
   researcherTools,
@@ -36,19 +40,23 @@ export { eventsFromAIMessageStream } from "./langgraph-stream.js";
 
 export async function* eventsFromToolMessage(
   message: BaseMessage,
+  metadata: StreamEventMetadata = {},
 ): AsyncGenerator<BaseEvent> {
   const toolMessage = message as ToolMessage;
   const toolCallId = toolMessage.tool_call_id;
 
   if (!toolCallId) return;
 
-  yield {
-    type: EventType.TOOL_CALL_RESULT,
-    messageId: message.id || uuid(),
-    toolCallId,
-    content: contentToString(message.content),
-    role: "tool",
-  } as BaseEvent;
+  yield withStreamEventMetadata(
+    {
+      type: EventType.TOOL_CALL_RESULT,
+      messageId: message.id || uuid(),
+      toolCallId,
+      content: contentToString(message.content),
+      role: "tool",
+    } as BaseEvent,
+    metadata,
+  );
 }
 
 export function toAIMessage(chunk: AIMessageChunk) {
@@ -99,7 +107,15 @@ async function* runSubAgent(
   const config = SUB_AGENT_CONFIGS[agentName];
   if (!config) return;
 
-  yield { type: EventType.STEP_STARTED, stepName: agentName } as BaseEvent;
+  const metadata: StreamEventMetadata = {
+    stepName: agentName,
+    parentStepName: "supervisor",
+  };
+
+  yield withStreamEventMetadata(
+    { type: EventType.STEP_STARTED, stepName: agentName } as BaseEvent,
+    metadata,
+  );
 
   logger.info("sub-agent started", { agentName });
 
@@ -114,7 +130,7 @@ async function* runSubAgent(
 
   while (!signal?.aborted) {
     const stream = await model.stream(subMessages, { signal });
-    const finalChunk = yield* eventsFromAIMessageStream(stream);
+    const finalChunk = yield* eventsFromAIMessageStream(stream, metadata);
 
     if (!finalChunk) break;
 
@@ -128,14 +144,17 @@ async function* runSubAgent(
     for (const message of asArray(toolResult.messages)) {
       subMessages.push(message);
       if (message instanceof ToolMessage) {
-        yield* eventsFromToolMessage(message);
+        yield* eventsFromToolMessage(message, metadata);
       }
     }
   }
 
   logger.info("sub-agent finished", { agentName });
 
-  yield { type: EventType.STEP_FINISHED, stepName: agentName } as BaseEvent;
+  yield withStreamEventMetadata(
+    { type: EventType.STEP_FINISHED, stepName: agentName } as BaseEvent,
+    metadata,
+  );
 }
 
 // ============================================================
@@ -225,20 +244,31 @@ export async function* runLangGraphAgent(
   const MAX_SUPERVISOR_ITERATIONS = 10;
 
   for (let i = 0; i < MAX_SUPERVISOR_ITERATIONS && !signal?.aborted; i++) {
-    yield {
-      type: EventType.STEP_STARTED,
-      stepName: "supervisor",
-    } as BaseEvent;
+    const supervisorMetadata: StreamEventMetadata = { stepName: "supervisor" };
+
+    yield withStreamEventMetadata(
+      {
+        type: EventType.STEP_STARTED,
+        stepName: "supervisor",
+      } as BaseEvent,
+      supervisorMetadata,
+    );
 
     const aiResponseStream = await supervisorModel.stream(stateMessages, {
       signal,
     });
-    const finalChunk = yield* eventsFromAIMessageStream(aiResponseStream);
+    const finalChunk = yield* eventsFromAIMessageStream(
+      aiResponseStream,
+      supervisorMetadata,
+    );
 
-    yield {
-      type: EventType.STEP_FINISHED,
-      stepName: "supervisor",
-    } as BaseEvent;
+    yield withStreamEventMetadata(
+      {
+        type: EventType.STEP_FINISHED,
+        stepName: "supervisor",
+      } as BaseEvent,
+      supervisorMetadata,
+    );
 
     if (!finalChunk) break;
 
@@ -322,7 +352,7 @@ export async function* runLangGraphAgent(
     for (const message of asArray(toolResult.messages)) {
       stateMessages.push(message);
       if (message instanceof ToolMessage) {
-        yield* eventsFromToolMessage(message);
+        yield* eventsFromToolMessage(message, supervisorMetadata);
       }
     }
   }

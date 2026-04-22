@@ -111,6 +111,30 @@ describe("updateMessagesWithAgentEvent", () => {
     );
   });
 
+  it("stores step metadata on assistant messages and tool calls", () => {
+    const updated = updateMessagesWithAgentEvent([], {
+      type: "tool_start",
+      parentMessageId: "assistant-step",
+      toolCallId: "tool-step",
+      toolCallName: "search_web",
+      stepName: "researcher",
+      parentStepName: "supervisor",
+    });
+
+    expect(updated[0]).toMatchObject({
+      id: "assistant-step",
+      stepName: "researcher",
+      parentStepName: "supervisor",
+      toolCalls: [
+        {
+          id: "tool-step",
+          stepName: "researcher",
+          parentStepName: "supervisor",
+        },
+      ],
+    });
+  });
+
   it("reuses an existing assistant message when tool calls start after text end", () => {
     const messages: ChatMessage[] = [
       {

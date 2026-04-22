@@ -30,6 +30,7 @@ async function parseJsonResponse<T>(res: Response): Promise<T | null> {
 function ensureAssistantMessage(
   messages: ChatMessage[],
   messageId: string,
+  metadata: Partial<Pick<ChatMessage, "stepName" | "parentStepName">> = {},
 ): ChatMessage[] {
   const existing = messages.find((message) => message.id === messageId);
   if (existing) {
@@ -39,6 +40,8 @@ function ensureAssistantMessage(
             ...message,
             role: "assistant",
             isStreaming: true,
+            stepName: message.stepName ?? metadata.stepName,
+            parentStepName: message.parentStepName ?? metadata.parentStepName,
           }
         : message,
     );
@@ -52,6 +55,7 @@ function ensureAssistantMessage(
       content: "",
       toolCalls: [],
       isStreaming: true,
+      ...metadata,
       createdAt: new Date().toISOString(),
     },
   ];
@@ -94,7 +98,10 @@ export function updateMessagesWithAgentEvent(
       ];
 
     case "assistant_start":
-      return ensureAssistantMessage(messages, event.messageId);
+      return ensureAssistantMessage(messages, event.messageId, {
+        stepName: event.stepName,
+        parentStepName: event.parentStepName,
+      });
 
     case "assistant_delta":
       return ensureAssistantMessage(messages, event.messageId).map((message) =>
@@ -118,8 +125,10 @@ export function updateMessagesWithAgentEvent(
       );
 
     case "tool_start": {
-      return ensureAssistantMessage(messages, event.parentMessageId).map(
-        (message) => {
+      return ensureAssistantMessage(messages, event.parentMessageId, {
+        stepName: event.stepName,
+        parentStepName: event.parentStepName,
+      }).map((message) => {
           if (message.id !== event.parentMessageId) return message;
           if (
             message.toolCalls?.some(
@@ -141,11 +150,12 @@ export function updateMessagesWithAgentEvent(
                   arguments: "",
                 },
                 complete: false,
+                stepName: event.stepName,
+                parentStepName: event.parentStepName,
               },
             ],
           };
-        },
-      );
+        });
     }
 
     case "tool_args":
@@ -302,7 +312,11 @@ export function useThreads() {
       if (event.type === "step_started") {
         setActiveSteps((prev) => [
           ...prev,
-          { stepName: event.stepName, startedAt: now() },
+          {
+            stepName: event.stepName,
+            parentStepName: event.parentStepName,
+            startedAt: now(),
+          },
         ]);
       } else if (event.type === "step_finished") {
         setActiveSteps((prev) =>

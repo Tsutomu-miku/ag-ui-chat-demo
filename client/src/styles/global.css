@@ -308,6 +308,266 @@ body {
   word-break: break-all;
 }
 
+/* ===== EXECUTION TREE ===== */
+.execution-tree {
+  max-width: var(--content-max-width);
+  margin: 0 auto 24px;
+  padding: 0 16px 0 64px;
+}
+
+.execution-tree-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.trace-live {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid rgba(16, 163, 127, 0.35);
+  border-radius: 999px;
+  color: var(--accent);
+  background: rgba(16, 163, 127, 0.08);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.agent-node {
+  position: relative;
+  margin: 0 0 12px;
+}
+
+.agent-node.depth-1 { margin-left: 22px; }
+.agent-node.depth-2 { margin-left: 44px; }
+
+.agent-node-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+}
+
+.agent-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-node.active .agent-badge {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.12);
+}
+
+.agent-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.agent-title span {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.agent-title small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.agent-status {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.agent-status.running {
+  color: var(--accent);
+}
+
+.agent-node-body {
+  margin-left: 15px;
+  padding: 8px 0 4px 26px;
+  border-left: 1px solid var(--border-color);
+}
+
+.agent-node.active > .agent-node-body {
+  border-left-color: rgba(16, 163, 127, 0.55);
+}
+
+.trace-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.trace-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+.trace-message {
+  position: relative;
+  margin: 0 0 10px;
+}
+
+.trace-message::before,
+.trace-tool::before {
+  content: "";
+  position: absolute;
+  left: -31px;
+  top: 13px;
+  width: 14px;
+  height: 1px;
+  background: var(--border-color);
+}
+
+.trace-content {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.65;
+  padding: 2px 0 8px;
+}
+
+.trace-content p { margin: 0 0 10px; }
+.trace-content p:last-child { margin-bottom: 0; }
+.trace-content ul, .trace-content ol { margin: 8px 0; padding-left: 22px; }
+.trace-content pre {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.trace-content code {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.trace-tool {
+  position: relative;
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.trace-tool.backend { border-color: var(--tool-backend-border); background: var(--tool-backend-bg); }
+.trace-tool.frontend { border-color: var(--tool-frontend-border); background: var(--tool-frontend-bg); }
+.trace-tool.delegation { border-color: var(--tool-delegation-border); background: var(--tool-delegation-bg); }
+
+.trace-tool-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trace-tool-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.trace-tool.backend .trace-tool-mark { background: #60a5fa; }
+.trace-tool.frontend .trace-tool-mark { background: #c084fc; }
+.trace-tool.delegation .trace-tool-mark { background: #4ade80; }
+
+.trace-tool-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.trace-tool-state {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.trace-tool-state.running {
+  color: var(--accent);
+}
+
+.trace-io {
+  margin-top: 8px;
+}
+
+.trace-io span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.trace-io pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 9px 10px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.trace-child-agent {
+  margin-top: 12px;
+}
+
 /* ===== STEP INDICATOR (Sub-agent execution) ===== */
 .step-indicator {
   max-width: var(--content-max-width);
@@ -552,6 +812,12 @@ body {
 @media (max-width: 768px) {
   .sidebar { position: fixed; left: 0; top: 0; z-index: 100; box-shadow: 4px 0 24px rgba(0,0,0,0.5); }
   .tool-calls, .frontend-tool-ui { padding: 0 16px; }
+  .execution-tree { padding: 0 8px 0 16px; }
+  .agent-node.depth-1, .agent-node.depth-2 { margin-left: 10px; }
+  .agent-node-body { padding-left: 18px; }
+  .trace-message::before, .trace-tool::before { left: -23px; width: 10px; }
+  .trace-tool-header { flex-wrap: wrap; }
+  .trace-tool-name { white-space: normal; }
   .feature-grid { grid-template-columns: 1fr; }
   .step-indicator { padding: 0 8px; }
 }

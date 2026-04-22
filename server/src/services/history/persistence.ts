@@ -2,7 +2,6 @@ import {
   type BaseEvent,
   EventType,
   type Message,
-  type ToolCall,
 } from "@ag-ui/core";
 import { v4 as uuid } from "uuid";
 
@@ -16,6 +15,7 @@ import {
   getOrCreateThread,
   type StoredMessage,
   type StoredRole,
+  type StoredToolCall,
 } from "./store.js";
 import { createLogger } from "../../config/logger.js";
 
@@ -29,6 +29,8 @@ type PersistableEvent = BaseEvent &
     toolCallId: string;
     toolCallName: string;
     parentMessageId: string;
+    stepName: string;
+    parentStepName: string;
   }>;
 
 function isStoredRole(role: Message["role"]): role is StoredRole {
@@ -65,6 +67,8 @@ export function persistHistory(
       content: messageContentToString(message.content),
       toolCallId: message.role === "tool" ? message.toolCallId : undefined,
       toolCalls: message.role === "assistant" ? message.toolCalls : undefined,
+      stepName: (message as Partial<StoredMessage>).stepName,
+      parentStepName: (message as Partial<StoredMessage>).parentStepName,
       createdAt: new Date().toISOString(),
     };
 
@@ -79,18 +83,23 @@ export function persistHistory(
     | {
         id: string;
         content: string;
-        toolCalls: ToolCall[];
+        toolCalls: StoredToolCall[];
         toolCallArgs: Map<string, string>;
+        stepName?: string;
+        parentStepName?: string;
       }
     | undefined;
 
-  const ensureAssistant = (messageId?: string) => {
+  const ensureAssistant = (messageId?: string, event?: PersistableEvent) => {
     currentAssistant ||= {
       id: messageId || uuid(),
       content: "",
       toolCalls: [],
       toolCallArgs: new Map<string, string>(),
     };
+
+    currentAssistant.stepName ||= event?.stepName;
+    currentAssistant.parentStepName ||= event?.parentStepName;
 
     return currentAssistant;
   };
@@ -108,6 +117,8 @@ export function persistHistory(
       content: currentAssistant.content,
       toolCalls:
         currentAssistant.toolCalls.length > 0 ? currentAssistant.toolCalls : undefined,
+      stepName: currentAssistant.stepName,
+      parentStepName: currentAssistant.parentStepName,
       createdAt: new Date().toISOString(),
     } satisfies StoredMessage;
 
@@ -131,26 +142,28 @@ export function persistHistory(
         if (currentAssistant?.id && event.messageId && currentAssistant.id !== event.messageId) {
           flushAssistant();
         }
-        ensureAssistant(event.messageId);
+        ensureAssistant(event.messageId, event);
         break;
       case EventType.TEXT_MESSAGE_CONTENT:
       case EventType.TEXT_MESSAGE_CHUNK:
-        ensureAssistant(event.messageId).content += event.delta || "";
+        ensureAssistant(event.messageId, event).content += event.delta || "";
         break;
       case EventType.TEXT_MESSAGE_END:
         break;
       case EventType.TOOL_CALL_START:
         if (!event.toolCallId || !event.toolCallName) break;
-        ensureAssistant(event.parentMessageId).toolCalls.push({
+        ensureAssistant(event.parentMessageId, event).toolCalls.push({
           id: event.toolCallId,
           type: "function",
           function: { name: event.toolCallName, arguments: "" },
+          stepName: event.stepName,
+          parentStepName: event.parentStepName,
         });
         currentAssistant?.toolCallArgs.set(event.toolCallId, "");
         break;
       case EventType.TOOL_CALL_ARGS: {
         if (!event.toolCallId) break;
-        const assistant = ensureAssistant();
+        const assistant = ensureAssistant(undefined, event);
         const updated =
           (assistant.toolCallArgs.get(event.toolCallId) || "") + (event.delta || "");
         const toolCall = assistant.toolCalls.find((item) => item.id === event.toolCallId);
@@ -171,6 +184,8 @@ export function persistHistory(
           role: "tool",
           content: event.content || "",
           toolCallId: event.toolCallId,
+          stepName: event.stepName,
+          parentStepName: event.parentStepName,
           createdAt: new Date().toISOString(),
         });
         existingIds.add(toolMessageId);
