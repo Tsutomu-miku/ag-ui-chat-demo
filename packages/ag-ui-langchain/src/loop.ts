@@ -19,7 +19,10 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type {
+  BaseChatModel,
+  BindToolsInput,
+} from "@langchain/core/language_models/chat_models";
 import { v4 as uuid } from "uuid";
 
 import {
@@ -43,7 +46,7 @@ export interface AgentLoopConfig {
   /** The LangChain chat model to use (must support bindTools) */
   model: BaseChatModel;
   /** Backend tools the agent can call server-side */
-  tools?: Parameters<BaseChatModel["bindTools"]>[0];
+  tools?: BindToolsInput[];
   /** System prompt prepended to messages */
   systemPrompt?: string;
   /** Maximum iterations before stopping (default: 10) */
@@ -54,7 +57,7 @@ export interface SubAgentDefinition {
   /** System prompt for the sub-agent */
   systemPrompt: string;
   /** Tools available to the sub-agent */
-  tools: Parameters<BaseChatModel["bindTools"]>[0];
+  tools: BindToolsInput[];
   /** Optional: custom model for this sub-agent */
   model?: BaseChatModel;
 }
@@ -62,6 +65,13 @@ export interface SubAgentDefinition {
 export interface SupervisorLoopConfig extends AgentLoopConfig {
   /** Sub-agent definitions keyed by name */
   subAgents: Record<string, SubAgentDefinition>;
+}
+
+function bindModelTools(model: BaseChatModel, tools: BindToolsInput[]) {
+  if (typeof model.bindTools !== "function") {
+    throw new Error("The provided chat model does not support bindTools().");
+  }
+  return model.bindTools(tools);
 }
 
 // ============================================================
@@ -93,10 +103,7 @@ export async function* createAgentLoop(
   const frontendToolNames = new Set(frontendTools.map((t) => t.name));
   const frontendModelTools = frontendTools.map(frontendToolToModelTool);
 
-  const boundModel = model.bindTools([
-    ...(tools as Parameters<BaseChatModel["bindTools"]>[0]),
-    ...frontendModelTools,
-  ]);
+  const boundModel = bindModelTools(model, [...tools, ...frontendModelTools]);
 
   const toolNode =
     (tools as unknown[]).length > 0 ? new ToolNode(tools as never[]) : null;
@@ -175,7 +182,7 @@ export async function* runSubAgent(
     metadata,
   );
 
-  const model = (subConfig.model ?? baseModel).bindTools(subConfig.tools);
+  const model = bindModelTools(subConfig.model ?? baseModel, subConfig.tools);
   const toolNode = new ToolNode(subConfig.tools as never[]);
 
   const subMessages: BaseMessage[] = [
@@ -280,8 +287,8 @@ export async function* createSupervisorLoop(
     },
   };
 
-  const supervisorModel = model.bindTools([
-    ...(tools as Parameters<BaseChatModel["bindTools"]>[0]),
+  const supervisorModel = bindModelTools(model, [
+    ...tools,
     ...frontendModelTools,
     delegateTool,
   ]);
@@ -381,11 +388,16 @@ export async function* createSupervisorLoop(
         );
       }
 
+      const subAgent = subAgents[agentName];
+      if (!subAgent) {
+        continue;
+      }
+
       // Run sub-agent
       const subAgentGen = runSubAgent(
         agentName,
         subAgentContext,
-        subAgents[agentName],
+        subAgent,
         model,
         signal,
       );
