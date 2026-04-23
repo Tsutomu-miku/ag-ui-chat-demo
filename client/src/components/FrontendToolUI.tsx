@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { PendingToolCall } from "../types";
+import type { PendingToolCall } from "ag-ui-react";
 
 interface Props {
   pendingToolCalls: PendingToolCall[];

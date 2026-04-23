@@ -1,4 +1,4 @@
-import type { ActiveStep } from "../types";
+import type { ActiveStep } from "ag-ui-react";
 
 const STEP_META: Record<string, { icon: string; label: string; description: string }> = {
   supervisor: {

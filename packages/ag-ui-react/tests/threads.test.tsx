@@ -1,0 +1,287 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { ChatThread } from "../src/types.js";
+import { useThreads } from "../src/threads.js";
+
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
+function renderHook<T>(useHook: () => T) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const result: { current: T | null } = { current: null };
+
+  function TestComponent() {
+    result.current = useHook();
+    return null;
+  }
+
+  act(() => {
+    root.render(<TestComponent />);
+  });
+
+  return {
+    result: result as { current: T },
+    unmount() {
+      act(() => {
+        root.unmount();
+      });
+      container.remove();
+    },
+  };
+}
+
+function jsonResponse(body: unknown, ok = true) {
+  return {
+    ok,
+    async text() {
+      return JSON.stringify(body);
+    },
+  } as Response;
+}
+
+describe("useThreads", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("loads thread summaries on mount and supports select/remove", async () => {
+    const list = [
+      {
+        id: "thread-1",
+        title: "First",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        messageCount: 1,
+        preview: "Hello",
+      },
+      {
+        id: "thread-2",
+        title: "Second",
+        createdAt: "2024-01-02T00:00:00.000Z",
+        updatedAt: "2024-01-02T00:00:00.000Z",
+        messageCount: 0,
+        preview: "",
+      },
+    ];
+    const thread: ChatThread = {
+      id: "thread-1",
+      title: "First",
+      messages: [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "Hello",
+          createdAt: "2024-01-01T00:00:00.000Z",
+        },
+      ],
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+    };
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(list))
+      .mockResolvedValueOnce(jsonResponse(thread))
+      .mockResolvedValueOnce(jsonResponse(null));
+
+    const hook = renderHook(() =>
+      useThreads({
+        historyApiUrl: "/history",
+        generateId: () => "generated-thread-id",
+      }),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/history/threads");
+    expect(hook.result.current.list).toEqual(list);
+
+    await act(async () => {
+      await hook.result.current.select("thread-1");
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/history/threads/thread-1");
+    expect(hook.result.current.activeId).toBe("thread-1");
+    expect(hook.result.current.active).toEqual(thread);
+
+    await act(async () => {
+      await hook.result.current.remove("thread-1");
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/history/threads/thread-1", {
+      method: "DELETE",
+    });
+    expect(hook.result.current.list).toEqual([
+      {
+        id: "thread-2",
+        title: "Second",
+        createdAt: "2024-01-02T00:00:00.000Z",
+        updatedAt: "2024-01-02T00:00:00.000Z",
+        messageCount: 0,
+        preview: "",
+      },
+    ]);
+    expect(hook.result.current.active).toBeNull();
+    expect(hook.result.current.activeId).toBeNull();
+    hook.unmount();
+  });
+
+  it("creates threads locally, reuses provided ids, and appends messages", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
+
+    const hook = renderHook(() =>
+      useThreads({
+        generateId: () => "thread-created",
+      }),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    let createdId = "";
+    await act(async () => {
+      createdId = await hook.result.current.create();
+    });
+
+    expect(createdId).toBe("thread-created");
+    expect(hook.result.current.active).toMatchObject({
+      id: "thread-created",
+      title: "New Chat",
+      messages: [],
+    });
+
+    await act(async () => {
+      hook.result.current.appendMessage({
+        id: "user-1",
+        role: "user",
+        content: "Hello",
+        createdAt: "2024-01-03T00:00:00.000Z",
+      });
+    });
+
+    expect(hook.result.current.active?.messages).toEqual([
+      {
+        id: "user-1",
+        role: "user",
+        content: "Hello",
+        createdAt: "2024-01-03T00:00:00.000Z",
+      },
+    ]);
+
+    await act(async () => {
+      await expect(
+        hook.result.current.ensureActiveThread("existing-thread"),
+      ).resolves.toBe("existing-thread");
+    });
+
+    await act(async () => {
+      await expect(hook.result.current.ensureActiveThread()).resolves.toBe(
+        "thread-created",
+      );
+    });
+    hook.unmount();
+  });
+
+  it("handles thread events, tracks active steps, and appends tool results", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
+
+    const hook = renderHook(() =>
+      useThreads({
+        generateId: () => "tool-message-id",
+      }),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await hook.result.current.create();
+    });
+
+    const activeThreadId = hook.result.current.activeId!;
+
+    act(() => {
+      hook.result.current.handleThreadEvent(activeThreadId, {
+        type: "step_started",
+        stepName: "researcher",
+        parentStepName: "supervisor",
+      });
+      hook.result.current.handleThreadEvent(activeThreadId, {
+        type: "assistant_start",
+        messageId: "assistant-1",
+        stepName: "researcher",
+        parentStepName: "supervisor",
+      });
+      hook.result.current.handleThreadEvent(activeThreadId, {
+        type: "assistant_delta",
+        messageId: "assistant-1",
+        delta: "Hello",
+      });
+      hook.result.current.handleThreadEvent(activeThreadId, {
+        type: "tool_start",
+        parentMessageId: "assistant-1",
+        toolCallId: "tool-1",
+        toolCallName: "search_web",
+      });
+      hook.result.current.handleThreadEvent(activeThreadId, {
+        type: "tool_end",
+        toolCallId: "tool-1",
+      });
+    });
+
+    expect(hook.result.current.activeSteps).toEqual([
+      expect.objectContaining({
+        stepName: "researcher",
+        parentStepName: "supervisor",
+      }),
+    ]);
+    expect(hook.result.current.active?.messages[0]).toMatchObject({
+      id: "assistant-1",
+      role: "assistant",
+      content: "Hello",
+      stepName: "researcher",
+      parentStepName: "supervisor",
+      toolCalls: [
+        {
+          id: "tool-1",
+          function: {
+            name: "search_web",
+            arguments: "",
+          },
+          complete: true,
+        },
+      ],
+    });
+
+    act(() => {
+      hook.result.current.appendToolResult(
+        activeThreadId,
+        "tool-1",
+        '{"ok":true}',
+      );
+    });
+
+    expect(hook.result.current.active?.messages).toHaveLength(2);
+    expect(hook.result.current.active?.messages[1]).toMatchObject({
+      id: "tool-message-id",
+      role: "tool",
+      content: '{"ok":true}',
+      toolCallId: "tool-1",
+    });
+
+    act(() => {
+      hook.result.current.handleThreadEvent(activeThreadId, {
+        type: "run_complete",
+      });
+    });
+
+    expect(hook.result.current.activeSteps).toEqual([]);
+    hook.unmount();
+  });
+});

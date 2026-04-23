@@ -8,6 +8,7 @@ import { AIMessageChunk } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
 import { eventsFromAIMessageStream, withStreamEventMetadata } from "../src/stream.js";
+import { toAIMessage } from "../src/tools.js";
 
 // ── Test helpers ──
 
@@ -95,6 +96,7 @@ describe("eventsFromAIMessageStream", () => {
     ).toEqual(["Hel", "lo", " world"]);
 
     expect(result).toBeInstanceOf(AIMessageChunk);
+    expect(toAIMessage(result!).content).toBe("Hello world");
   });
 
   it("returns undefined for empty stream", async () => {
@@ -155,6 +157,8 @@ describe("eventsFromAIMessageStream", () => {
     ]);
 
     expect(items[0]).toMatchObject({
+      type: EventType.TOOL_CALL_START,
+      parentMessageId: "msg-tool",
       toolCallId: "tool-1",
       toolCallName: "search_web",
     });

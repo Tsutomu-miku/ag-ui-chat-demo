@@ -1,20 +1,4 @@
-/**
- * This file is kept as a thin re-export for backward compatibility.
- * The canonical implementation now lives in the `ag-ui-react` package.
- */
-
 import type { FrontendToolDefinition } from "ag-ui-react";
-
-export { useAgentChat } from "ag-ui-react";
-export type { UseAgentChatOptions, UseAgentChatReturn } from "ag-ui-react";
-
-// ============================================================
-// Frontend Tool Definitions (demo-specific)
-//
-// These tools require user interaction before execution.
-// The agent sees them and can call them. When it does,
-// the frontend shows a UI for the user to interact with.
-// ============================================================
 
 export const FRONTEND_TOOLS: FrontendToolDefinition[] = [
   {

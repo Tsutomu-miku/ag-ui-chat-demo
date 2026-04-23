@@ -1,6 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ActiveStep, ChatMessage, ToolCallFunction } from "../types";
+import type { ActiveStep, ChatMessage, ToolCallFunction } from "ag-ui-react";
 
 interface Props {
   messages: ChatMessage[];

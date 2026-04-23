@@ -9,7 +9,6 @@
 import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import {
   AIMessage,
-  AIMessageChunk,
   SystemMessage,
   ToolMessage,
   type BaseMessage,
@@ -42,9 +41,6 @@ import { writerTools, WRITER_SYSTEM_PROMPT } from "./subagents/writer.js";
 import { createAgentModel } from "./model.js";
 
 const logger = createLogger("langgraph");
-
-// Re-export for backward compatibility with existing tests
-export { eventsFromAIMessageStream, eventsFromToolMessage, toAIMessage };
 
 // ============================================================
 // Sub-agent runner

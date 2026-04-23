@@ -1,10 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useAgentChat } from "../hooks/useAgentChat";
-import { FRONTEND_TOOLS } from "../hooks/useAgentChat";
+import {
+  useAgentChat,
+  type ActiveStep,
+  type ChatMessage,
+  type ChatThread,
+  type ThreadAgentEvent,
+} from "ag-ui-react";
 import { MessageBubble } from "./MessageBubble";
 import { FrontendToolUI } from "./FrontendToolUI";
 import { ExecutionTree } from "./ExecutionTree";
-import type { ActiveStep, ChatMessage, ChatThread, ThreadAgentEvent } from "../types";
+import { FRONTEND_TOOLS } from "../tools/frontendTools";
 
 function buildMessageView(messages: ChatMessage[]) {
   return {
@@ -17,7 +22,11 @@ function buildMessageView(messages: ChatMessage[]) {
 }
 
 function buildConversationTurns(messages: ChatMessage[]) {
-  const turns: Array<{ id: string; user?: ChatMessage; events: ChatMessage[] }> = [];
+  const turns: Array<{
+    id: string;
+    user?: ChatMessage;
+    events: ChatMessage[];
+  }> = [];
 
   for (const message of messages) {
     if (message.role === "user") {
@@ -142,11 +151,8 @@ export function ChatPanel({
   };
 
   const messages = thread?.messages ?? [];
-  const {
-    hasMessages,
-    hasStreamingMessage,
-    hasActiveToolCall,
-  } = buildMessageView(messages);
+  const { hasMessages, hasStreamingMessage, hasActiveToolCall } =
+    buildMessageView(messages);
   const conversationTurns = buildConversationTurns(messages);
 
   return (
@@ -184,7 +190,8 @@ export function ChatPanel({
             <div className="welcome-icon">🤖</div>
             <h2>AG-UI Chat Demo</h2>
             <p>
-              Best-practice demonstration of the AG-UI protocol with multi-agent orchestration
+              Best-practice demonstration of the AG-UI protocol with multi-agent
+              orchestration
             </p>
             <div className="feature-grid">
               <div
@@ -201,7 +208,9 @@ export function ChatPanel({
               <div
                 className="feature-card"
                 onClick={() =>
-                  setInput("Research the latest AI agent frameworks and write a summary report")
+                  setInput(
+                    "Research the latest AI agent frameworks and write a summary report",
+                  )
                 }
               >
                 <span className="feature-emoji">📝</span>
@@ -213,7 +222,11 @@ export function ChatPanel({
               </div>
               <div
                 className="feature-card"
-                onClick={() => setInput("Calculate (23 * 45) + (67 / 3) and explain the result")}
+                onClick={() =>
+                  setInput(
+                    "Calculate (23 * 45) + (67 / 3) and explain the result",
+                  )
+                }
               >
                 <span className="feature-emoji">🧮</span>
                 <span>
@@ -240,8 +253,9 @@ export function ChatPanel({
             </div>
             <p className="welcome-sub">
               A <strong>Supervisor</strong> agent coordinates{" "}
-              <strong>Researcher</strong> and <strong>Writer</strong> sub-agents.{" "}
-              <strong>Frontend tools</strong> require your confirmation.
+              <strong>Researcher</strong> and <strong>Writer</strong>{" "}
+              sub-agents. <strong>Frontend tools</strong> require your
+              confirmation.
             </p>
           </div>
         )}
@@ -270,18 +284,21 @@ export function ChatPanel({
           );
         })}
 
-        {isStreaming && !hasStreamingMessage && !hasActiveToolCall && threadActions.activeSteps.length === 0 && (
-          <div className="message assistant">
-            <div className="message-avatar">🤖</div>
-            <div className="message-content">
-              <div className="typing-indicator">
-                <span />
-                <span />
-                <span />
+        {isStreaming &&
+          !hasStreamingMessage &&
+          !hasActiveToolCall &&
+          threadActions.activeSteps.length === 0 && (
+            <div className="message assistant">
+              <div className="message-avatar">🤖</div>
+              <div className="message-content">
+                <div className="typing-indicator">
+                  <span />
+                  <span />
+                  <span />
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
         {/* Frontend tool interaction UI */}
         {pendingToolCalls.length > 0 && (
@@ -344,7 +361,8 @@ export function ChatPanel({
           )}
         </div>
         <p className="input-hint">
-          Enter to send · Shift+Enter for new line · Supervisor coordinates Researcher &amp; Writer agents
+          Enter to send · Shift+Enter for new line · Supervisor coordinates
+          Researcher &amp; Writer agents
         </p>
       </div>
     </main>

@@ -1,7 +1,7 @@
 import { useState } from "react";
+import { useThreads } from "ag-ui-react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
-import { useThreads } from "./hooks/useThreads";
 
 export default function App() {
   const threads = useThreads();

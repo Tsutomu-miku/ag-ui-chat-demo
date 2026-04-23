@@ -1,4 +1,4 @@
-import type { ThreadSummary } from "../types";
+import type { ThreadSummary } from "ag-ui-react";
 
 interface SidebarProps {
   threads: ThreadSummary[];
