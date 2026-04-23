@@ -3,58 +3,55 @@
  *
  * TypeScript implementation aligned with Python ag_ui_langgraph (v0.0.34).
  *
+ * ## Architecture (aligned with Python)
+ *
+ * The core `LangGraphAgent` accepts a **compiled LangGraph state graph** and
+ * translates its internal execution events (`graph.streamEvents(version: "v2")`)
+ * into AG-UI protocol events. This is the same pattern as the Python package.
+ *
+ * Factory functions `createReactAgent` / `createSupervisor` build LangGraph
+ * graphs under the hood, then wrap them in `LangGraphAgent`.
+ *
  * ## Quick Start
  *
  * ```ts
- * import { createReactAgent, createSupervisor } from "ag-ui-langchain";
+ * import { LangGraphAgent, createReactAgent } from "ag-ui-langchain";
  * import { createAgentEndpoint } from "ag-ui-hono";
  *
- * // Single agent
- * const agent = createReactAgent({
- *   model: new ChatOpenAI({ model: "gpt-4o" }),
- *   tools: [searchWeb, calculate],
- *   systemPrompt: "You are a helpful assistant.",
- * });
+ * // Option 1: Direct graph wrapping (most aligned with Python)
+ * import { createReactAgent as lgCreateReactAgent } from "@langchain/langgraph/prebuilt";
+ * const graph = lgCreateReactAgent({ llm: model, tools });
+ * const agent = new LangGraphAgent({ name: "my-agent", graph });
  *
- * // Multi-agent supervisor
- * const supervisor = createSupervisor({
- *   model: new ChatOpenAI({ model: "gpt-4o" }),
- *   subAgents: {
- *     researcher: { systemPrompt: "...", tools: [searchWeb] },
- *     writer:     { systemPrompt: "...", tools: [calculate] },
- *   },
- * });
+ * // Option 2: Factory helper
+ * const agent = createReactAgent({ model, tools, systemPrompt: "..." });
  *
- * // Wire into endpoint (one line)
- * const app = createAgentEndpoint((input, signal) => agent.clone().run(input, signal));
+ * // Wire into endpoint
+ * const app = createAgentEndpoint((input) => agent.clone().run(input));
  * ```
  *
  * @packageDocumentation
  */
 
-// ── Agent classes and factories (primary API) ──
+// ── Agent class and factories (primary API, aligned with Python) ──
 export {
   LangGraphAgent,
-  SupervisorAgent,
   createReactAgent,
   createSupervisor,
 } from "./agent.js";
 
 export type {
   LangGraphAgentConfig,
+  ReactAgentConfig,
+  SubAgentDefinition,
   SupervisorConfig,
 } from "./agent.js";
 
-// Re-export SubAgentDefinition (defined in loop.ts, re-exported via agent.ts)
-export type { SubAgentDefinition } from "./loop.js";
-
-// ── Types ──
+// ── Types (aligned with Python types.py) ──
 export type {
   StreamEventMetadata,
   LangChainToolCall,
   LangGraphReasoning,
-  LangGraphEventTypes,
-  CustomEventNames,
   State,
   SchemaKeys,
   ThinkingProcess,
@@ -70,6 +67,9 @@ export type {
 } from "./types.js";
 
 export {
+  LangGraphEventTypes,
+  CustomEventNames,
+  // Backward-compat aliases
   LangGraphEventTypes as LangGraphEventTypesEnum,
   CustomEventNames as CustomEventNamesEnum,
 } from "./types.js";
@@ -101,7 +101,7 @@ export {
 
 export type { AGUIContentItem } from "./convert.js";
 
-// ── Streaming (AI message stream → AG-UI events) ──
+// ── Streaming helpers ──
 export {
   eventsFromAIMessageStream,
   withStreamEventMetadata,
@@ -110,7 +110,7 @@ export {
 // ── Tool event helpers ──
 export { eventsFromToolMessage, toAIMessage } from "./tools.js";
 
-// ── Low-level loop functions (use LangGraphAgent / createReactAgent instead) ──
+// ── Legacy loop functions (for backward compatibility) ──
 export {
   createAgentLoop,
   createSupervisorLoop,

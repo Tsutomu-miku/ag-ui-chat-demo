@@ -1,151 +1,155 @@
 # ag-ui-langchain
 
-AG-UI protocol adapter for LangChain / LangGraph — TypeScript implementation aligned with the official Python [`ag-ui-langgraph`](https://github.com/ag-ui-protocol/ag-ui/tree/main/integrations/langgraph/python) package (v0.0.34).
+AG-UI protocol adapter for LangChain / LangGraph — TypeScript implementation **truly aligned** with the official Python [`ag-ui-langgraph`](https://github.com/ag-ui-protocol/ag-ui/tree/main/integrations/langgraph/python) package (v0.0.34).
+
+## Architecture (aligned with Python)
+
+The core `LangGraphAgent` class accepts a **compiled LangGraph state graph** and translates its internal execution events via `graph.streamEvents(version: "v2")` into AG-UI protocol events. This is the **same architecture** as the Python package:
+
+```
+Python:  LangGraphAgent(graph=compiled_graph)  →  graph.astream_events(v2)  →  AG-UI events
+     TS: LangGraphAgent({ graph: compiledGraph }) →  graph.streamEvents(v2)  →  AG-UI events
+```
 
 ## Quick Start
 
-### Single Agent (recommended)
+### Option 1: Direct graph wrapping (most aligned with Python)
 
 ```ts
-import { createReactAgent } from "ag-ui-langchain";
-import { ChatOpenAI } from "@langchain/openai";
+import { LangGraphAgent } from "ag-ui-langchain";
+import { createReactAgent } from "@langchain/langgraph/prebuilt";
 
+// Build a LangGraph compiled graph (exactly like Python)
+const graph = createReactAgent({ llm: model, tools: [searchWeb, calculate] });
+
+// Wrap in LangGraphAgent — same as Python: LangGraphAgent(graph=graph, name="my-agent")
+const agent = new LangGraphAgent({ name: "my-agent", graph });
+
+// Per-request: clone() for isolation, run() for event stream
+for await (const event of agent.clone().run(input)) {
+  encoder.encode(event);
+}
+```
+
+### Option 2: Factory helpers (convenience)
+
+```ts
+import { createReactAgent, createSupervisor } from "ag-ui-langchain";
+
+// Single agent — builds a LangGraph graph internally
 const agent = createReactAgent({
   model: new ChatOpenAI({ model: "gpt-4o" }),
   tools: [searchWeb, calculate],
   systemPrompt: "You are a helpful assistant.",
 });
 
-// In your endpoint handler — clone() per request for isolation:
-for await (const event of agent.clone().run(input, signal)) {
-  encoder.encode(event);
-}
-```
-
-### Supervisor + Sub-Agents (recommended)
-
-```ts
-import { createSupervisor } from "ag-ui-langchain";
-
-const agent = createSupervisor({
+// Supervisor — same pattern
+const supervisor = createSupervisor({
   model: new ChatOpenAI({ model: "gpt-4o" }),
-  systemPrompt: "You are a supervisor that delegates work.",
   subAgents: {
-    researcher: { systemPrompt: "You research topics.", tools: [searchWeb] },
-    writer:     { systemPrompt: "You write content.",   tools: [writeDoc] },
+    researcher: { systemPrompt: "...", tools: [searchWeb] },
+    writer:     { systemPrompt: "...", tools: [writeDoc] },
   },
 });
 
-// Same pattern — clone + run:
-for await (const event of agent.clone().run(input, signal)) {
-  encoder.encode(event);
-}
+// Same usage for both:
+for await (const event of agent.clone().run(input)) { ... }
 ```
 
-### With ag-ui-hono Endpoint (one-liner)
+### With ag-ui-hono endpoint
 
 ```ts
-import { createReactAgent } from "ag-ui-langchain";
+import { LangGraphAgent } from "ag-ui-langchain";
 import { createAgentEndpoint } from "ag-ui-hono";
 
-const agent = createReactAgent({ model, tools, systemPrompt: "..." });
-const app = createAgentEndpoint((input, signal) => agent.clone().run(input, signal));
+const agent = new LangGraphAgent({ name: "agent", graph });
+const app = createAgentEndpoint((input) => agent.clone().run(input));
 ```
+
+## Event Translation (LangGraph → AG-UI)
+
+The core value of this package: translating LangGraph's internal execution events into the AG-UI protocol.
+
+| LangGraph Event | AG-UI Event(s) |
+|---|---|
+| `on_chat_model_stream` (text) | `TEXT_MESSAGE_START` → `TEXT_MESSAGE_CONTENT` |
+| `on_chat_model_stream` (tool call) | `TOOL_CALL_START` → `TOOL_CALL_ARGS` |
+| `on_chat_model_end` | `TEXT_MESSAGE_END` or `TOOL_CALL_END` |
+| `on_tool_end` | `TOOL_CALL_RESULT` (+ start/args/end if not streamed) |
+| `on_tool_error` | (resets internal flags) |
+| `on_custom_event` / `manually_emit_message` | `TEXT_MESSAGE_START/CONTENT/END` + `CUSTOM` |
+| `on_custom_event` / `manually_emit_tool_call` | `TOOL_CALL_START/ARGS/END` + `CUSTOM` |
+| `on_custom_event` / `manually_emit_state` | `STATE_SNAPSHOT` + `CUSTOM` |
+| Node changes (via metadata) | `STEP_FINISHED` → `STEP_STARTED` |
+| Stream start/end | `RUN_STARTED` / `RUN_FINISHED` |
+| Reasoning content | `REASONING_START/CONTENT/END` |
 
 ## API Reference
 
-### Agent Classes
+### Core Class
 
-| Class | Description |
-|---|---|
-| `LangGraphAgent` | Core agent adapter with `clone()` / `run()` — aligned with Python `LangGraphAgent` |
-| `SupervisorAgent` | Multi-agent supervisor variant, extends `LangGraphAgent` |
+```ts
+class LangGraphAgent {
+  constructor(config: LangGraphAgentConfig);
+  clone(): LangGraphAgent;             // Fresh copy per request
+  run(input: RunAgentInput): AsyncGenerator<BaseEvent>;
+}
+```
+
+### Configuration
+
+```ts
+interface LangGraphAgentConfig {
+  name: string;                              // Agent name
+  graph: CompiledStateGraph<any, any, any>;  // Compiled LangGraph graph
+  description?: string;
+  config?: Record<string, unknown>;          // Runnable config
+}
+```
 
 ### Factory Functions
 
 | Function | Returns | Description |
 |---|---|---|
-| `createReactAgent(config)` | `LangGraphAgent` | Create a single-agent with tools |
-| `createSupervisor(config)` | `SupervisorAgent` | Create a supervisor coordinating sub-agents |
+| `createReactAgent(config)` | `LangGraphAgent` | Builds a prebuilt react agent graph, wraps in LangGraphAgent |
+| `createSupervisor(config)` | `LangGraphAgent` | Builds a supervisor graph, wraps in LangGraphAgent |
 
-### Configuration Types
+## Python Alignment
 
-```ts
-interface LangGraphAgentConfig {
-  name?: string;                                      // Display name
-  model: BaseChatModel;                               // LangChain chat model
-  tools?: Parameters<BaseChatModel["bindTools"]>[0];  // Backend tools
-  systemPrompt?: string;                              // System prompt
-  maxIterations?: number;                             // Max loop iterations (default: 10)
-}
-
-interface SubAgentDefinition {
-  systemPrompt: string;                               // Sub-agent system prompt
-  tools: Parameters<BaseChatModel["bindTools"]>[0];   // Sub-agent tools
-  model?: BaseChatModel;                              // Optional model override
-}
-
-interface SupervisorConfig extends LangGraphAgentConfig {
-  subAgents: Record<string, SubAgentDefinition>;      // Sub-agents keyed by name
-}
-```
-
-### Low-Level Loop Functions
-
-For advanced use cases where you need direct control:
-
-```ts
-import { createAgentLoop, createSupervisorLoop } from "ag-ui-langchain";
-
-// These accept the same config types and return AsyncGenerator<BaseEvent>
-yield* createAgentLoop(input, config, signal);
-yield* createSupervisorLoop(input, supervisorConfig, signal);
-```
-
-### Stream & Message Utilities
-
-```ts
-import {
-  eventsFromAIMessageStream,  // LangChain model stream → AG-UI events
-  eventsFromToolMessage,       // ToolMessage → TOOL_CALL_RESULT event
-  toAIMessage,                 // AIMessageChunk → AIMessage
-  withStreamEventMetadata,     // Attach step metadata to events
-  toLangChainMessages,         // AG-UI messages → LangChain messages
-  langchainMessagesToAgui,     // LangChain messages → AG-UI messages
-} from "ag-ui-langchain";
-```
-
-## Features — Python Alignment
-
-| Feature | Python equivalent | Status |
-|---|---|---|
-| `LangGraphAgent` / `createReactAgent` | `LangGraphAgent(graph=...)` | ✅ |
-| `SupervisorAgent` / `createSupervisor` | `LangGraphAgent` with sub-agents | ✅ |
-| `clone()` / `run()` | `clone()` / `run()` | ✅ |
-| `toLangChainMessages` | `agui_messages_to_langchain` | ✅ |
-| `langchainMessagesToAgui` | `langchain_messages_to_agui` | ✅ |
-| `convertLangchainMultimodalToAgui` | `convert_langchain_multimodal_to_agui` | ✅ |
-| `convertAguiMultimodalToLangchain` | `convert_agui_multimodal_to_langchain` | ✅ |
-| `eventsFromAIMessageStream` | stream event conversion | ✅ |
-| `eventsFromToolMessage` / `toAIMessage` | tool event helpers | ✅ |
-| `makeJsonSafe` / `jsonSafeStringify` | `make_json_safe` / `json_safe_stringify` | ✅ |
-| `resolveReasoningContent` | `resolve_reasoning_content` | ✅ |
-| `resolveEncryptedReasoningContent` | `resolve_encrypted_reasoning_content` | ✅ |
-| `resolveMessageContent` | `resolve_message_content` | ✅ |
-| `flattenUserContent` | `flatten_user_content` | ✅ |
-| `normalizeToolContent` | `normalize_tool_content` | ✅ |
-| `LangGraphEventTypes` / `CustomEventNames` | `LangGraphEventTypes` / `CustomEventNames` | ✅ |
-| All Python `types.py` types | `State`, `SchemaKeys`, `RunMetadata`, etc. | ✅ |
+| Feature | Python `ag_ui_langgraph` | TS `ag-ui-langchain` | Status |
+|---|---|---|---|
+| `LangGraphAgent(graph=...)` | ✅ | `new LangGraphAgent({ graph })` | ✅ |
+| `clone()` / `run()` | ✅ | ✅ | ✅ |
+| `graph.astream_events(v2)` event translation | ✅ | `graph.streamEvents(v2)` | ✅ |
+| `on_chat_model_stream` → text/tool events | ✅ | ✅ | ✅ |
+| `on_chat_model_end` → cleanup | ✅ | ✅ | ✅ |
+| `on_tool_end` → TOOL_CALL_RESULT | ✅ | ✅ | ✅ |
+| `on_tool_error` → flag reset | ✅ | ✅ | ✅ |
+| `on_custom_event` dispatch | ✅ | ✅ | ✅ |
+| Node change → STEP events | ✅ | ✅ | ✅ |
+| Reasoning event lifecycle | ✅ | ✅ | ✅ |
+| Message-in-progress tracking | ✅ | ✅ | ✅ |
+| Subgraph boundary detection | ✅ | ⚠️ Best-effort | Partial |
+| Time-travel / Regeneration | ✅ | ❌ | Future |
+| Interrupt handling (Command resume) | ✅ | ❌ | Future |
+| State/Messages snapshots | ✅ | ❌ | Future |
+| Predict-state suppression | ✅ | ❌ | Future |
+| `add_langgraph_fastapi_endpoint` | ✅ | `createAgentEndpoint` (ag-ui-hono) | ✅ |
+| `StateStreamingMiddleware` | ✅ | ❌ | Future |
+| Message conversion (utils.py) | ✅ | ✅ | ✅ |
+| All types (types.py) | ✅ | ✅ | ✅ |
+| `make_json_safe` / `json_safe_stringify` | ✅ | ✅ | ✅ |
+| Reasoning resolution (5 formats) | ✅ | ✅ | ✅ |
 
 ## Test Coverage
 
-155 tests across 8 test suites:
+151 tests across 8 test suites:
 
-- **agent.test.ts** (25) — LangGraphAgent, SupervisorAgent, factories, clone/run lifecycle, delegation, abort signals
+- **agent.test.ts** (21) — LangGraphAgent graph-based event translation, text streaming, tool calls, step management, custom events, tool errors, full loop integration
 - **convert.test.ts** (69) — Message conversion, multimodal round-trip, content utilities
 - **stream.test.ts** (9) — AI message stream → AG-UI events, tool call streaming, metadata
 - **tools.test.ts** (6) — Tool result events, AIMessage conversion
-- **make-json-safe.test.ts** (21) — JSON-safe serialization (primitives, cycles, Date, Set, Map)
-- **reasoning.test.ts** (15) — Reasoning content resolution (Anthropic, LangChain, Bedrock, OpenAI, DeepSeek)
+- **make-json-safe.test.ts** (21) — JSON-safe serialization
+- **reasoning.test.ts** (15) — Reasoning content resolution (5 provider formats)
 - **schema-keys.test.ts** (6) — Schema key filtering
 - **types.test.ts** (4) — Enum values and type structure

@@ -1,21 +1,22 @@
 /**
  * LangGraph Agent — Demo configuration using ag-ui-langchain.
  *
- * This file shows how simple it is to set up a multi-agent supervisor
- * using the `createSupervisor` factory. The entire wiring (delegation tool,
- * sub-agent lifecycle, context sharing, step events) is handled by the package.
+ * This file shows how simple it is to set up an agent using the
+ * `LangGraphAgent` class, which wraps a compiled LangGraph graph
+ * and translates its execution events into AG-UI protocol events —
+ * aligned with the Python ag_ui_langgraph pattern.
  */
 
 import type { BaseEvent } from "@ag-ui/core";
 import type { RunAgentInput } from "@ag-ui/core";
 import {
-  createSupervisor,
-  type SupervisorAgent,
+  LangGraphAgent,
   // Re-export low-level utilities for backward-compat with existing tests
   eventsFromAIMessageStream,
   eventsFromToolMessage,
   toAIMessage,
 } from "ag-ui-langchain";
+import { createReactAgent as lgCreateReactAgent } from "@langchain/langgraph/prebuilt";
 
 import { backendTools } from "./tools.js";
 import {
@@ -28,7 +29,7 @@ import { createAgentModel } from "./model.js";
 // Re-export for backward compatibility with existing tests
 export { eventsFromAIMessageStream, eventsFromToolMessage, toAIMessage };
 
-// ── Agent definition (lazy singleton to avoid module-load-time env errors) ──
+// ── Agent definition ──
 
 const SUPERVISOR_SYSTEM_PROMPT = `You are a Supervisor agent that coordinates specialized sub-agents to answer the user's request.
 
@@ -48,25 +49,26 @@ IMPORTANT: Issue only ONE delegate_to_subagent call per turn. Do NOT combine del
 
 You also have direct access to all backend and frontend tools. Use them directly for simple, single-step tasks instead of delegating.`;
 
-let _agent: SupervisorAgent | null = null;
+// Lazy singleton — avoids module-load-time env errors
+let _agent: LangGraphAgent | null = null;
 
-function getAgent(): SupervisorAgent {
+function getAgent(): LangGraphAgent {
   if (!_agent) {
-    _agent = createSupervisor({
+    // Build a real LangGraph compiled graph using the prebuilt react agent
+    const model = createAgentModel();
+    const allTools = [...backendTools, ...researcherTools, ...writerTools];
+
+    const graph = lgCreateReactAgent({
+      llm: model,
+      tools: allTools,
+      prompt: SUPERVISOR_SYSTEM_PROMPT,
+    });
+
+    // Wrap in LangGraphAgent — aligned with Python pattern:
+    // Python: agent = LangGraphAgent(graph=graph, name="supervisor")
+    _agent = new LangGraphAgent({
       name: "supervisor",
-      model: createAgentModel(),
-      tools: backendTools,
-      systemPrompt: SUPERVISOR_SYSTEM_PROMPT,
-      subAgents: {
-        researcher: {
-          systemPrompt: RESEARCHER_SYSTEM_PROMPT,
-          tools: researcherTools,
-        },
-        writer: {
-          systemPrompt: WRITER_SYSTEM_PROMPT,
-          tools: writerTools,
-        },
-      },
+      graph,
     });
   }
   return _agent;
@@ -79,5 +81,5 @@ export async function* runLangGraphAgent(
   signal?: AbortSignal,
 ): AsyncGenerator<BaseEvent> {
   // clone() per request for isolated state (aligned with Python pattern)
-  yield* getAgent().clone().run(input, signal);
+  yield* getAgent().clone().run(input);
 }
