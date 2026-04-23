@@ -5,8 +5,10 @@
  * reusable agent execution loops that convert LangChain model + tools
  * into AG-UI event streams.
  *
- * These are higher-level than the raw stream converters in stream.ts
- * and tools.ts, providing ready-made patterns for common agent architectures.
+ * These are lower-level building blocks; prefer `createReactAgent` /
+ * `createSupervisor` from `./agent.ts` for most use cases.
+ *
+ * @packageDocumentation
  */
 
 import { EventType, type BaseEvent, type RunAgentInput, type Tool } from "@ag-ui/core";
@@ -29,47 +31,37 @@ import {
 } from "./convert.js";
 import { eventsFromAIMessageStream, withStreamEventMetadata } from "./stream.js";
 import { eventsFromToolMessage, toAIMessage } from "./tools.js";
-import type { LangChainToolCall, StreamEventMetadata } from "./types.js";
-
-type BindToolsFn = NonNullable<BaseChatModel["bindTools"]>;
-type ModelToolDefinitions = Parameters<BindToolsFn>[0];
-
-function bindModelTools(model: BaseChatModel, tools: ModelToolDefinitions) {
-  const bindTools = model.bindTools;
-  if (!bindTools) {
-    throw new Error("Configured chat model does not support tool binding.");
-  }
-  return bindTools.call(model, tools);
-}
+import type { StreamEventMetadata } from "./types.js";
 
 // ============================================================
 // Agent loop configuration
 // ============================================================
 
 export interface AgentLoopConfig {
+  /** Display name for this agent */
+  name?: string;
   /** The LangChain chat model to use (must support bindTools) */
   model: BaseChatModel;
   /** Backend tools the agent can call server-side */
-  tools?: ModelToolDefinitions;
+  tools?: Parameters<BaseChatModel["bindTools"]>[0];
   /** System prompt prepended to messages */
   systemPrompt?: string;
   /** Maximum iterations before stopping (default: 10) */
   maxIterations?: number;
 }
 
+export interface SubAgentDefinition {
+  /** System prompt for the sub-agent */
+  systemPrompt: string;
+  /** Tools available to the sub-agent */
+  tools: Parameters<BaseChatModel["bindTools"]>[0];
+  /** Optional: custom model for this sub-agent */
+  model?: BaseChatModel;
+}
+
 export interface SupervisorLoopConfig extends AgentLoopConfig {
   /** Sub-agent definitions keyed by name */
-  subAgents: Record<
-    string,
-    {
-      /** System prompt for the sub-agent */
-      systemPrompt: string;
-      /** Tools available to the sub-agent */
-      tools: ModelToolDefinitions;
-      /** Optional: custom model for this sub-agent */
-      model?: BaseChatModel;
-    }
-  >;
+  subAgents: Record<string, SubAgentDefinition>;
 }
 
 // ============================================================
@@ -101,8 +93,8 @@ export async function* createAgentLoop(
   const frontendToolNames = new Set(frontendTools.map((t) => t.name));
   const frontendModelTools = frontendTools.map(frontendToolToModelTool);
 
-  const boundModel = bindModelTools(model, [
-    ...(tools as ModelToolDefinitions),
+  const boundModel = model.bindTools([
+    ...(tools as Parameters<BaseChatModel["bindTools"]>[0]),
     ...frontendModelTools,
   ]);
 
@@ -158,7 +150,7 @@ export async function* createAgentLoop(
 }
 
 // ============================================================
-// createSupervisorLoop — multi-agent supervisor pattern
+// runSubAgent — internal helper
 // ============================================================
 
 /**
@@ -166,10 +158,10 @@ export async function* createAgentLoop(
  * Yields AG-UI events wrapped with step metadata.
  * Returns the accumulated text output for context sharing.
  */
-async function* runSubAgent(
+export async function* runSubAgent(
   agentName: string,
   parentMessages: BaseMessage[],
-  subConfig: SupervisorLoopConfig["subAgents"][string],
+  subConfig: SubAgentDefinition,
   baseModel: BaseChatModel,
   signal?: AbortSignal,
 ): AsyncGenerator<BaseEvent, string> {
@@ -183,7 +175,7 @@ async function* runSubAgent(
     metadata,
   );
 
-  const model = bindModelTools(subConfig.model ?? baseModel, subConfig.tools);
+  const model = (subConfig.model ?? baseModel).bindTools(subConfig.tools);
   const toolNode = new ToolNode(subConfig.tools as never[]);
 
   const subMessages: BaseMessage[] = [
@@ -224,6 +216,10 @@ async function* runSubAgent(
 
   return textOutput;
 }
+
+// ============================================================
+// createSupervisorLoop — multi-agent supervisor pattern
+// ============================================================
 
 /**
  * Create a supervisor loop that coordinates multiple sub-agents.
@@ -284,8 +280,8 @@ export async function* createSupervisorLoop(
     },
   };
 
-  const supervisorModel = bindModelTools(model, [
-    ...(tools as ModelToolDefinitions),
+  const supervisorModel = model.bindTools([
+    ...(tools as Parameters<BaseChatModel["bindTools"]>[0]),
     ...frontendModelTools,
     delegateTool,
   ]);
@@ -352,7 +348,7 @@ export async function* createSupervisorLoop(
       if (!subAgentNames.has(agentName)) {
         // Unknown agent → error feedback
         const errorMessage = new ToolMessage({
-          content: `Error: Unknown sub-agent "${agentName}". Available agents: ${[...subAgentNames].join(", ")}`,
+          content: `Error: Unknown sub-agent "${agentName}". Available: ${[...subAgentNames].join(", ")}`,
           tool_call_id: delegateCall.id || uuid(),
         });
         stateMessages.push(errorMessage);
@@ -386,15 +382,10 @@ export async function* createSupervisorLoop(
       }
 
       // Run sub-agent
-      const subAgentConfig = subAgents[agentName];
-      if (!subAgentConfig) {
-        continue;
-      }
-
       const subAgentGen = runSubAgent(
         agentName,
         subAgentContext,
-        subAgentConfig,
+        subAgents[agentName],
         model,
         signal,
       );
