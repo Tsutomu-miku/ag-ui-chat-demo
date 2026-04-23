@@ -1,5 +1,5 @@
 /**
- * ag-ui-langchain — AG-UI protocol adapter for LangChain / LangGraph.
+ * ag-ui-langchain — AG-UI protocol adapter for LangGraph.
  *
  * TypeScript implementation fully aligned with Python ag_ui_langgraph (v0.0.34).
  *
@@ -72,9 +72,6 @@ export {
   LangGraphEventTypes,
   CustomEventNames,
   DEFAULT_SCHEMA_KEYS,
-  // Backward-compat aliases
-  LangGraphEventTypes as LangGraphEventTypesEnum,
-  CustomEventNames as CustomEventNamesEnum,
 } from "./types.js";
 
 // ── Message conversion (aligned with Python utils.py) ──
@@ -103,20 +100,3 @@ export {
 } from "./convert.js";
 
 export type { AGUIContentItem } from "./convert.js";
-
-// ── Streaming helpers ──
-export {
-  eventsFromAIMessageStream,
-  withStreamEventMetadata,
-} from "./stream.js";
-
-// ── Tool event helpers ──
-export { eventsFromToolMessage, toAIMessage } from "./tools.js";
-
-// ── Legacy loop functions (for backward compatibility) ──
-export {
-  createAgentLoop,
-  createSupervisorLoop,
-} from "./loop.js";
-
-export type { AgentLoopConfig, SupervisorLoopConfig } from "./loop.js";

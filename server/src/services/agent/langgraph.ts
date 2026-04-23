@@ -9,13 +9,7 @@
 
 import type { BaseEvent } from "@ag-ui/core";
 import type { RunAgentInput } from "@ag-ui/core";
-import {
-  LangGraphAgent,
-  // Re-export low-level utilities for backward-compat with existing tests
-  eventsFromAIMessageStream,
-  eventsFromToolMessage,
-  toAIMessage,
-} from "ag-ui-langchain";
+import { LangGraphAgent } from "ag-ui-langchain";
 import { createReactAgent as lgCreateReactAgent } from "@langchain/langgraph/prebuilt";
 
 import { backendTools } from "./tools.js";
@@ -25,9 +19,6 @@ import {
 } from "./subagents/researcher.js";
 import { writerTools, WRITER_SYSTEM_PROMPT } from "./subagents/writer.js";
 import { createAgentModel } from "./model.js";
-
-// Re-export for backward compatibility with existing tests
-export { eventsFromAIMessageStream, eventsFromToolMessage, toAIMessage };
 
 // ── Agent definition ──
 
