@@ -1,7 +1,7 @@
 /**
  * ag-ui-langchain — AG-UI protocol adapter for LangChain / LangGraph.
  *
- * TypeScript implementation aligned with Python ag_ui_langgraph (v0.0.34).
+ * TypeScript implementation fully aligned with Python ag_ui_langgraph (v0.0.34).
  *
  * ## Architecture (aligned with Python)
  *
@@ -64,11 +64,14 @@ export type {
   LangGraphPlatformActionExecutionMessage,
   LangGraphPlatformMessage,
   PredictStateTool,
+  PreparedStream,
+  ForwardedProps,
 } from "./types.js";
 
 export {
   LangGraphEventTypes,
   CustomEventNames,
+  DEFAULT_SCHEMA_KEYS,
   // Backward-compat aliases
   LangGraphEventTypes as LangGraphEventTypesEnum,
   CustomEventNames as CustomEventNamesEnum,

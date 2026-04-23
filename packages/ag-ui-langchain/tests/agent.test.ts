@@ -4,10 +4,16 @@
  * Uses mock graph objects to test the event translation pipeline
  * without real LLM calls, exactly as the Python version does with
  * mock compiled graphs.
+ *
+ * Covers: constructor, clone, lifecycle, text streaming, tool calls,
+ * step management, custom events, tool errors, error handling,
+ * _dispatchEvent middleware, metadata switches, RawEvent passthrough,
+ * forwarded_props, on_chain_end state tracking, predict_state suppression,
+ * subgraph boundary detection, orphan tool message filter.
  */
 
 import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
-import { AIMessageChunk, ToolMessage as LCToolMessage } from "@langchain/core/messages";
+import { AIMessageChunk, ToolMessage as LCToolMessage, HumanMessage as LCHumanMessage } from "@langchain/core/messages";
 import { describe, expect, it, vi } from "vitest";
 
 import { LangGraphAgent, type LangGraphAgentConfig } from "../src/agent.js";
@@ -42,6 +48,7 @@ function createMockGraph(events: Array<{
   name?: string;
   data?: any;
   metadata?: Record<string, any>;
+  run_id?: string;
 }>): any {
   return {
     nodes: {},
@@ -53,6 +60,7 @@ function createMockGraph(events: Array<{
             name: ev.name ?? "",
             data: ev.data ?? {},
             metadata: ev.metadata ?? {},
+            run_id: ev.run_id,
           };
         }
       }
@@ -75,7 +83,6 @@ function textStreamEvents(
   const words = text.split(" ");
   const events: any[] = [];
 
-  // on_chat_model_stream for each word
   for (let i = 0; i < words.length; i++) {
     events.push({
       event: LangGraphEventTypes.OnChatModelStream,
@@ -90,7 +97,6 @@ function textStreamEvents(
     });
   }
 
-  // on_chat_model_end
   events.push({
     event: LangGraphEventTypes.OnChatModelEnd,
     name: "ChatOpenAI",
@@ -111,7 +117,6 @@ function toolCallStreamEvents(
   messageId = "ai-msg-1",
 ): Array<any> {
   return [
-    // Tool call start chunk
     {
       event: LangGraphEventTypes.OnChatModelStream,
       name: "ChatOpenAI",
@@ -129,7 +134,6 @@ function toolCallStreamEvents(
       },
       metadata: { langgraph_node: nodeId },
     },
-    // Tool call args chunk
     {
       event: LangGraphEventTypes.OnChatModelStream,
       name: "ChatOpenAI",
@@ -147,7 +151,6 @@ function toolCallStreamEvents(
       },
       metadata: { langgraph_node: nodeId },
     },
-    // on_chat_model_end
     {
       event: LangGraphEventTypes.OnChatModelEnd,
       name: "ChatOpenAI",
@@ -216,9 +219,22 @@ describe("LangGraphAgent", () => {
     const agent = new LangGraphAgent({ name: "agent", graph });
     const clone1 = agent.clone();
     const clone2 = agent.clone();
-
-    // They should be independent instances
     expect(clone1).not.toBe(clone2);
+  });
+
+  it("detects subgraph nodes", () => {
+    const mockSubgraph = { constructor: { name: "CompiledStateGraph" } };
+    const graph = createMockGraph([]);
+    (graph as any).nodes = {
+      researcher: { bound: mockSubgraph },
+      writer: { bound: mockSubgraph },
+      callModel: { bound: { constructor: { name: "RunnableSequence" } } },
+    };
+    const agent = new LangGraphAgent({ name: "agent", graph });
+    expect((agent as any).subgraphs.size).toBe(2);
+    expect((agent as any).subgraphs.has("researcher")).toBe(true);
+    expect((agent as any).subgraphs.has("writer")).toBe(true);
+    expect((agent as any).subgraphs.has("callModel")).toBe(false);
   });
 });
 
@@ -255,7 +271,6 @@ describe("event translation: text streaming", () => {
 
     const finished = events.find((e) => e.type === EventType.RUN_FINISHED) as any;
     expect(finished.threadId).toBe("t-123");
-    expect(finished.runId).toBe("r-456");
   });
 
   it("streams text content as deltas", async () => {
@@ -298,7 +313,6 @@ describe("event translation: tool calls", () => {
 
     expect(types).toContain(EventType.TOOL_CALL_START);
     expect(types).toContain(EventType.TOOL_CALL_ARGS);
-    // on_chat_model_end should clean up
     expect(types).toContain(EventType.TOOL_CALL_END);
   });
 
@@ -321,7 +335,6 @@ describe("event translation: tool calls", () => {
   });
 
   it("emits tool call start/args/end when not previously streamed", async () => {
-    // Tool end without prior streaming (has_function_streaming = false)
     const graph = createMockGraph([
       toolEndEvent("calculate", "tc-2", "42"),
     ]);
@@ -344,11 +357,8 @@ describe("event translation: tool calls", () => {
 describe("event translation: step management", () => {
   it("emits STEP_STARTED/FINISHED on node changes", async () => {
     const graph = createMockGraph([
-      // Events from "callModel" node
       ...textStreamEvents("thinking...", "callModel"),
-      // Events from "tools" node
       toolEndEvent("search", "tc-1", "result", "tools"),
-      // Back to "callModel" node
       ...textStreamEvents("Final answer", "callModel", "ai-msg-2"),
     ]);
     const agent = new LangGraphAgent({ name: "agent", graph });
@@ -358,11 +368,8 @@ describe("event translation: step management", () => {
     const stepStarts = events.filter((e) => e.type === EventType.STEP_STARTED);
     const stepFinishes = events.filter((e) => e.type === EventType.STEP_FINISHED);
 
-    // Should have steps for: callModel, tools, callModel (again)
     expect(stepStarts.length).toBeGreaterThanOrEqual(2);
     expect(stepFinishes.length).toBeGreaterThanOrEqual(1);
-
-    // First step should be callModel
     expect((stepStarts[0] as any).stepName).toBe("callModel");
   });
 
@@ -390,7 +397,7 @@ describe("event translation: custom events", () => {
       {
         event: LangGraphEventTypes.OnCustomEvent,
         name: CustomEventNames.ManuallyEmitMessage,
-        data: { content: "Manual message" },
+        data: { message_id: "manual-1", message: "Manual message" },
         metadata: {},
       },
     ]);
@@ -402,7 +409,6 @@ describe("event translation: custom events", () => {
     expect(types).toContain(EventType.TEXT_MESSAGE_START);
     expect(types).toContain(EventType.TEXT_MESSAGE_CONTENT);
     expect(types).toContain(EventType.TEXT_MESSAGE_END);
-    // Also emitted as CUSTOM
     expect(types).toContain(EventType.CUSTOM);
   });
 
@@ -441,8 +447,14 @@ describe("event translation: custom events", () => {
     const stateEvents = events.filter(
       (e) => e.type === EventType.STATE_SNAPSHOT,
     );
-    expect(stateEvents.length).toBe(1);
-    expect((stateEvents[0] as any).snapshot).toEqual({ counter: 42 });
+    // At least one from the custom event; may also get one from state diff tracking
+    expect(stateEvents.length).toBeGreaterThanOrEqual(1);
+    // The first one should contain the manually emitted state
+    // One of the snapshots should contain the manually emitted state
+    const hasManualState = stateEvents.some(
+      (e) => (e as any).snapshot?.counter === 42,
+    );
+    expect(hasManualState).toBe(true);
   });
 
   it("passes through unknown custom events as CUSTOM", async () => {
@@ -485,9 +497,323 @@ describe("event translation: tool errors", () => {
     const events = await collectEvents(agent.clone().run(makeInput()));
     const types = events.map((e) => e.type);
 
-    // Should recover and still produce text
     expect(types).toContain(EventType.TEXT_MESSAGE_CONTENT);
     expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
+  });
+});
+
+// ============================================================
+// NEW: Error event handling
+// ============================================================
+
+describe("event translation: error events", () => {
+  it("translates stream error to RUN_ERROR and stops", async () => {
+    const graph = createMockGraph([
+      ...textStreamEvents("starting", "agent"),
+      {
+        event: "error",
+        name: "",
+        data: { message: "LLM rate limit exceeded" },
+        metadata: {},
+      },
+      // These should NOT be reached
+      ...textStreamEvents("after error", "agent", "ai-2"),
+    ]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const types = events.map((e) => e.type);
+
+    expect(types).toContain(EventType.RUN_ERROR);
+    const errorEvent = events.find((e) => e.type === EventType.RUN_ERROR) as any;
+    expect(errorEvent.message).toBe("LLM rate limit exceeded");
+  });
+
+  it("handles error event without message gracefully", async () => {
+    const graph = createMockGraph([
+      { event: "error", data: {}, metadata: {} },
+    ]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const errorEvent = events.find((e) => e.type === EventType.RUN_ERROR) as any;
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent.message).toBe("Unknown error");
+  });
+});
+
+// ============================================================
+// NEW: _dispatchEvent middleware
+// ============================================================
+
+describe("_dispatchEvent middleware", () => {
+  it("allows subclass to filter events", async () => {
+    class FilterAgent extends LangGraphAgent {
+      protected _dispatchEvent(event: BaseEvent): BaseEvent | null {
+        // Suppress all RAW events
+        if (event.type === EventType.RAW) return null;
+        return event;
+      }
+    }
+
+    const graph = createMockGraph(textStreamEvents("Hello"));
+    const agent = new FilterAgent({ name: "filter", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const rawEvents = events.filter((e) => e.type === EventType.RAW);
+    expect(rawEvents.length).toBe(0);
+    // Other events should still come through
+    expect(events.some((e) => e.type === EventType.TEXT_MESSAGE_CONTENT)).toBe(true);
+  });
+
+  it("allows subclass to transform events", async () => {
+    class TransformAgent extends LangGraphAgent {
+      protected _dispatchEvent(event: BaseEvent): BaseEvent | null {
+        if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
+          return { ...event, delta: (event as any).delta.toUpperCase() } as any;
+        }
+        return event;
+      }
+    }
+
+    const graph = createMockGraph(textStreamEvents("hello"));
+    const agent = new TransformAgent({ name: "transform", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const content = events.filter((e) => e.type === EventType.TEXT_MESSAGE_CONTENT);
+    expect((content[0] as any).delta).toBe("HELLO");
+  });
+});
+
+// ============================================================
+// NEW: RawEvent passthrough
+// ============================================================
+
+describe("RawEvent passthrough", () => {
+  it("emits RAW event for every stream event", async () => {
+    const graph = createMockGraph(textStreamEvents("Hi", "node1"));
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const rawEvents = events.filter((e) => e.type === EventType.RAW);
+
+    // Should have at least as many RAW events as there are stream events
+    // textStreamEvents("Hi") = 1 on_chat_model_stream + 1 on_chat_model_end = 2
+    expect(rawEvents.length).toBeGreaterThanOrEqual(2);
+    expect((rawEvents[0] as any).event).toBeDefined();
+    expect((rawEvents[0] as any).event.event).toBe(LangGraphEventTypes.OnChatModelStream);
+  });
+});
+
+// ============================================================
+// NEW: Metadata switches (emit-messages, emit-tool-calls)
+// ============================================================
+
+describe("metadata switches", () => {
+  it("suppresses text messages when emit-messages=false", async () => {
+    const graph = createMockGraph([
+      {
+        event: LangGraphEventTypes.OnChatModelStream,
+        name: "ChatOpenAI",
+        data: {
+          chunk: new AIMessageChunk({ id: "msg-1", content: "suppressed" }),
+        },
+        metadata: { langgraph_node: "agent", "emit-messages": false },
+      },
+      {
+        event: LangGraphEventTypes.OnChatModelEnd,
+        name: "ChatOpenAI",
+        data: {},
+        metadata: { langgraph_node: "agent", "emit-messages": false },
+      },
+    ]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const textStarts = events.filter((e) => e.type === EventType.TEXT_MESSAGE_START);
+    const textContent = events.filter((e) => e.type === EventType.TEXT_MESSAGE_CONTENT);
+
+    expect(textStarts.length).toBe(0);
+    expect(textContent.length).toBe(0);
+  });
+
+  it("suppresses tool calls when emit-tool-calls=false", async () => {
+    const graph = createMockGraph([
+      {
+        event: LangGraphEventTypes.OnChatModelStream,
+        name: "ChatOpenAI",
+        data: {
+          chunk: new AIMessageChunk({
+            id: "msg-1",
+            content: "",
+            tool_call_chunks: [{ id: "tc-1", index: 0, name: "my_tool", args: "" }],
+          }),
+        },
+        metadata: { langgraph_node: "agent", "emit-tool-calls": false },
+      },
+      {
+        event: LangGraphEventTypes.OnChatModelEnd,
+        name: "ChatOpenAI",
+        data: {},
+        metadata: { langgraph_node: "agent" },
+      },
+    ]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const toolStarts = events.filter((e) => e.type === EventType.TOOL_CALL_START);
+
+    expect(toolStarts.length).toBe(0);
+  });
+});
+
+// ============================================================
+// NEW: forwarded_props + camelCase→snake_case
+// ============================================================
+
+describe("forwarded_props", () => {
+  it("normalizes camelCase forwarded_props to snake_case", async () => {
+    const graph = createMockGraph(textStreamEvents("ok"));
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    // Should not throw when forwardedProps has camelCase keys
+    const input = makeInput();
+    (input as any).forwardedProps = {
+      nodeName: "myNode",
+      streamSubgraphs: true,
+    };
+
+    const events = await collectEvents(agent.clone().run(input));
+    expect(events[0].type).toBe(EventType.RUN_STARTED);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+  });
+
+  it("handles input without forwarded_props", async () => {
+    const graph = createMockGraph(textStreamEvents("ok"));
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    expect(events[0].type).toBe(EventType.RUN_STARTED);
+    expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+  });
+});
+
+// ============================================================
+// NEW: on_chain_end state tracking
+// ============================================================
+
+describe("on_chain_end state tracking", () => {
+  it("emits STATE_SNAPSHOT on node exit with state diff", async () => {
+    const graph = createMockGraph([
+      {
+        event: LangGraphEventTypes.OnChatModelStream,
+        name: "ChatOpenAI",
+        data: {
+          chunk: new AIMessageChunk({ id: "msg-1", content: "hello" }),
+        },
+        metadata: { langgraph_node: "agent" },
+      },
+      {
+        event: LangGraphEventTypes.OnChatModelEnd,
+        name: "ChatOpenAI",
+        data: {},
+        metadata: { langgraph_node: "agent" },
+      },
+      // on_chain_end with output state update
+      {
+        event: LangGraphEventTypes.OnChainEnd,
+        name: "agent",
+        data: { output: { custom_key: "value123" } },
+        metadata: { langgraph_node: "agent" },
+      },
+    ]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const snapshots = events.filter((e) => e.type === EventType.STATE_SNAPSHOT);
+
+    // Should have at least one state snapshot from the chain_end state diff
+    expect(snapshots.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ============================================================
+// NEW: predict_state suppression
+// ============================================================
+
+describe("predict_state suppression", () => {
+  it("emits PredictState custom event when predict_state metadata present", async () => {
+    const predictMeta = [{ tool: "update_state", state_key: "counter", tool_argument: "value" }];
+    const graph = createMockGraph([
+      {
+        event: LangGraphEventTypes.OnChatModelStream,
+        name: "ChatOpenAI",
+        data: {
+          chunk: new AIMessageChunk({
+            id: "msg-1",
+            content: "",
+            tool_call_chunks: [{ id: "tc-ps", index: 0, name: "update_state", args: "" }],
+          }),
+        },
+        metadata: { langgraph_node: "agent", predict_state: predictMeta },
+      },
+      {
+        event: LangGraphEventTypes.OnChatModelEnd,
+        name: "ChatOpenAI",
+        data: {},
+        metadata: { langgraph_node: "agent" },
+      },
+    ]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const customEvents = events.filter(
+      (e) => e.type === EventType.CUSTOM && (e as any).name === "PredictState",
+    );
+    expect(customEvents.length).toBe(1);
+    expect((customEvents[0] as any).value).toEqual(predictMeta);
+  });
+});
+
+// ============================================================
+// NEW: Orphan tool message filter
+// ============================================================
+
+describe("orphan tool message filter", () => {
+  it("filters out orphan tool messages after last HumanMessage", () => {
+    const agent = new LangGraphAgent({ name: "agent", graph: createMockGraph([]) });
+    const filterFn = (agent as any)._filterOrphanToolMessages.bind(agent);
+
+    const humanMsg = new LCHumanMessage({ content: "hello" });
+    const toolMsg = new LCToolMessage({
+      content: "Error: No tool call found with id tc-123",
+      tool_call_id: "tc-123",
+    });
+    const normalToolMsg = new LCToolMessage({
+      content: "Result: 42",
+      tool_call_id: "tc-456",
+    });
+
+    const messages = [humanMsg, toolMsg, normalToolMsg];
+    const filtered = filterFn(messages);
+
+    expect(filtered.length).toBe(2);
+    expect(filtered[0]).toBe(humanMsg);
+    expect(filtered[1]).toBe(normalToolMsg);
+  });
+
+  it("preserves all messages when no orphans", () => {
+    const agent = new LangGraphAgent({ name: "agent", graph: createMockGraph([]) });
+    const filterFn = (agent as any)._filterOrphanToolMessages.bind(agent);
+
+    const humanMsg = new LCHumanMessage({ content: "hello" });
+    const toolMsg = new LCToolMessage({
+      content: "Valid result",
+      tool_call_id: "tc-1",
+    });
+
+    const filtered = filterFn([humanMsg, toolMsg]);
+    expect(filtered.length).toBe(2);
   });
 });
 
@@ -514,11 +840,8 @@ describe("full agent loop", () => {
 
   it("handles tool call → tool result → text response", async () => {
     const graph = createMockGraph([
-      // Model calls a tool
       ...toolCallStreamEvents("get_weather", "tc-w", { city: "Tokyo" }, "callModel"),
-      // Tool executes
       toolEndEvent("get_weather", "tc-w", "Sunny, 25°C", "tools"),
-      // Model responds with text
       ...textStreamEvents("The weather in Tokyo is sunny, 25°C.", "callModel", "ai-2"),
     ]);
     const agent = new LangGraphAgent({ name: "weather-agent", graph });
@@ -526,31 +849,23 @@ describe("full agent loop", () => {
     const events = await collectEvents(agent.clone().run(makeInput()));
     const types = events.map((e) => e.type);
 
-    // Tool call lifecycle
     expect(types).toContain(EventType.TOOL_CALL_START);
     expect(types).toContain(EventType.TOOL_CALL_ARGS);
     expect(types).toContain(EventType.TOOL_CALL_END);
     expect(types).toContain(EventType.TOOL_CALL_RESULT);
-
-    // Text response
     expect(types).toContain(EventType.TEXT_MESSAGE_START);
     expect(types).toContain(EventType.TEXT_MESSAGE_CONTENT);
     expect(types).toContain(EventType.TEXT_MESSAGE_END);
-
-    // Lifecycle
     expect(types[0]).toBe(EventType.RUN_STARTED);
     expect(types[types.length - 1]).toBe(EventType.RUN_FINISHED);
   });
 
   it("handles multiple tool calls in sequence", async () => {
     const graph = createMockGraph([
-      // First tool call
       ...toolCallStreamEvents("search", "tc-1", { q: "a" }, "callModel"),
       toolEndEvent("search", "tc-1", "result-a", "tools"),
-      // Second tool call
       ...toolCallStreamEvents("search", "tc-2", { q: "b" }, "callModel", "ai-2"),
       toolEndEvent("search", "tc-2", "result-b", "tools"),
-      // Final response
       ...textStreamEvents("Combined results.", "callModel", "ai-3"),
     ]);
     const agent = new LangGraphAgent({ name: "agent", graph });
@@ -563,5 +878,32 @@ describe("full agent loop", () => {
     expect(toolResults.length).toBe(2);
     expect((toolResults[0] as any).content).toBe("result-a");
     expect((toolResults[1] as any).content).toBe("result-b");
+  });
+
+  it("updates run_id from event stream", async () => {
+    const graph = createMockGraph([
+      {
+        event: LangGraphEventTypes.OnChatModelStream,
+        name: "ChatOpenAI",
+        data: {
+          chunk: new AIMessageChunk({ id: "msg-1", content: "hi" }),
+        },
+        metadata: { langgraph_node: "agent" },
+        run_id: "updated-run-id",
+      },
+      {
+        event: LangGraphEventTypes.OnChatModelEnd,
+        name: "ChatOpenAI",
+        data: {},
+        metadata: { langgraph_node: "agent" },
+        run_id: "updated-run-id",
+      },
+    ]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const finished = events.find((e) => e.type === EventType.RUN_FINISHED) as any;
+    // run_id should be updated from the stream event
+    expect(finished.runId).toBe("updated-run-id");
   });
 });

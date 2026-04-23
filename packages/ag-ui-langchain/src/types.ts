@@ -39,6 +39,10 @@ export type SchemaKeys = {
   context?: string[] | null;
 };
 
+// ── Default schema keys (protocol-internal) ──
+
+export const DEFAULT_SCHEMA_KEYS = ["messages", "tools"];
+
 // ── Reasoning / thinking process ──
 
 export type ThinkingProcess = {
@@ -68,7 +72,7 @@ export type MessagesInProgressRecord = Record<
   MessageInProgress | null
 >;
 
-// ── Run metadata ──
+// ── Run metadata (aligned with Python RunMetadata TypedDict) ──
 
 export type RunMetadata = {
   /** Unique run identifier */
@@ -85,6 +89,24 @@ export type RunMetadata = {
   state_reliable?: boolean;
   manually_emitted_state?: State | null;
   reasoning_process?: ThinkingProcess | null;
+};
+
+// ── Prepared stream (from prepare_stream) ──
+
+export type PreparedStream = {
+  stream: AsyncIterable<any> | null;
+  state: State | null;
+  config: Record<string, any> | null;
+  events_to_dispatch?: any[];
+};
+
+// ── Forwarded props (from RunAgentInput) ──
+
+export type ForwardedProps = {
+  node_name?: string | null;
+  command?: { resume?: any } | null;
+  stream_subgraphs?: boolean;
+  [key: string]: unknown;
 };
 
 // ── Tool call type ──
