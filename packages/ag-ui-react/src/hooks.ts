@@ -12,6 +12,7 @@ import { useState, useCallback, useRef, useMemo } from "react";
 import { HttpAgent } from "@ag-ui/client";
 import type { AgentSubscriber } from "@ag-ui/client";
 import type {
+  ChatMessage,
   FrontendToolDefinition,
   PendingToolCall,
   ThreadAgentEvent,
@@ -37,6 +38,8 @@ function getEventStepMetadata(event: unknown): EventStepMetadata {
 export interface UseAgentChatOptions {
   /** Base URL for the AG-UI agent endpoint */
   agentUrl?: string;
+  /** Optional request headers passed to HttpAgent */
+  headers?: Record<string, string>;
   /** Frontend tools that require user interaction before execution */
   frontendTools?: FrontendToolDefinition[];
   /** Called for each ThreadAgentEvent during a run */
@@ -49,8 +52,9 @@ export interface UseAgentChatReturn {
   /** Start a new agent run with the given messages */
   sendMessage: (
     threadId: string,
-    messages: Array<Record<string, unknown>>,
+    messages: ChatMessage[],
     onComplete: () => Promise<void>,
+    runInput?: Record<string, unknown>,
   ) => Promise<void>;
   /** Abort the current run */
   stopStreaming: () => void;
@@ -59,6 +63,7 @@ export interface UseAgentChatReturn {
     toolCallId: string,
     result: string,
     onComplete: () => Promise<void>,
+    messages?: ChatMessage[],
   ) => Promise<void>;
   /** Whether a run is currently in progress */
   isStreaming: boolean;
@@ -88,6 +93,7 @@ const defaultGenerateId = () => crypto.randomUUID();
  */
 export function useAgentChat({
   agentUrl = "/api/agent",
+  headers,
   frontendTools = [],
   onThreadEvent,
   generateId = defaultGenerateId,
@@ -98,10 +104,16 @@ export function useAgentChat({
   );
 
   // Track current run context for multi-turn frontend tool calls
-  const runContextRef = useRef<{ threadId: string } | null>(null);
+  const runContextRef = useRef<{
+    threadId: string;
+    runInput?: Record<string, unknown>;
+  } | null>(null);
 
   // Persistent HttpAgent instance (re-created only when URL changes)
-  const agent = useMemo(() => new HttpAgent({ url: agentUrl }), [agentUrl]);
+  const agent = useMemo(
+    () => new HttpAgent({ url: agentUrl, headers }),
+    [agentUrl, headers],
+  );
 
   // Set of frontend tool names for fast lookup
   const frontendToolNames = useMemo(
@@ -119,23 +131,24 @@ export function useAgentChat({
   const sendMessage = useCallback(
     async (
       threadId: string,
-      messages: Array<Record<string, unknown>>,
+      messages: ChatMessage[],
       onComplete: () => Promise<void>,
+      runInput?: Record<string, unknown>,
     ) => {
       setIsStreaming(true);
       setPendingToolCalls([]);
 
-      runContextRef.current = { threadId };
+      runContextRef.current = { threadId, runInput };
 
       const pendingFrontend: PendingToolCall[] = [];
       let activeAssistantMessageId: string | null = null;
 
       agent.threadId = threadId;
       agent.messages = messages.map((m) => ({
-        id: (m.id as string) ?? generateId(),
-        role: m.role as string,
-        content: m.content as string,
-        ...(m.toolCallId ? { toolCallId: m.toolCallId as string } : {}),
+        id: m.id || generateId(),
+        role: m.role,
+        content: m.content,
+        ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
       })) as never[];
 
       const subscriber: AgentSubscriber = {
@@ -193,12 +206,21 @@ export function useAgentChat({
           });
 
           if (frontendToolNames.has(toolCallName)) {
-            pendingFrontend.push({
+            const pendingToolCall = {
               toolCallId: event.toolCallId,
               toolCallName,
               args: toolCallArgs,
               status: "pending",
               ...getEventStepMetadata(event),
+            } satisfies PendingToolCall;
+            pendingFrontend.push(pendingToolCall);
+            // 前端工具一旦参数流结束，就立刻展示交互卡片；
+            // 不要等到 run finalized，否则服务端稍有延迟时 UI 会卡住不显示。
+            setPendingToolCalls((prev) => {
+              if (prev.some((item) => item.toolCallId === pendingToolCall.toolCallId)) {
+                return prev;
+              }
+              return [...prev, pendingToolCall];
             });
           }
         },
@@ -226,6 +248,45 @@ export function useAgentChat({
           });
         },
 
+        onReasoningMessageStartEvent: ({ event }) => {
+          const messageId =
+            (event as { messageId?: string }).messageId ||
+            activeAssistantMessageId ||
+            "";
+          if (!messageId) return;
+          emitThreadEvent(threadId, {
+            type: "reasoning_start",
+            messageId,
+            ...getEventStepMetadata(event),
+          });
+        },
+
+        onReasoningMessageContentEvent: ({ event }) => {
+          const messageId =
+            (event as { messageId?: string }).messageId ||
+            activeAssistantMessageId ||
+            "";
+          const delta = (event as { delta?: string }).delta || "";
+          if (!messageId || !delta) return;
+          emitThreadEvent(threadId, {
+            type: "reasoning_delta",
+            messageId,
+            delta,
+          });
+        },
+
+        onReasoningMessageEndEvent: ({ event }) => {
+          const messageId =
+            (event as { messageId?: string }).messageId ||
+            activeAssistantMessageId ||
+            "";
+          if (!messageId) return;
+          emitThreadEvent(threadId, {
+            type: "reasoning_end",
+            messageId,
+          });
+        },
+
         onStepFinishedEvent: ({ event }) => {
           const { parentStepName } = getEventStepMetadata(event);
           emitThreadEvent(threadId, {
@@ -238,11 +299,13 @@ export function useAgentChat({
         onRunFinalized: async () => {
           emitThreadEvent(threadId, { type: "run_complete" });
 
+          // 无论是否还有 pending frontend tool，都应该让调用方刷新侧栏/列表，
+          // 否则第一轮结束后若 agent 问询用户（pending tool call），新建的
+          // thread 永远不会出现在历史列表中。
           if (pendingFrontend.length > 0) {
             setPendingToolCalls(pendingFrontend);
-          } else {
-            await onComplete();
           }
+          await onComplete();
 
           setIsStreaming(false);
         },
@@ -262,6 +325,7 @@ export function useAgentChat({
           {
             runId: generateId(),
             tools: frontendTools as never[],
+            ...(runInput || {}),
           } as never,
           subscriber,
         );
@@ -277,22 +341,44 @@ export function useAgentChat({
       toolCallId: string,
       result: string,
       onComplete: () => Promise<void>,
+      messages?: ChatMessage[],
     ) => {
       const ctx = runContextRef.current;
       if (!ctx) return;
 
-      const toolResultMessage = {
+      const toolResultMessage: ChatMessage = {
         id: generateId(),
         role: "tool",
         content: result,
         toolCallId,
+        createdAt: new Date().toISOString(),
       };
 
       setPendingToolCalls((prev) =>
         prev.filter((p) => p.toolCallId !== toolCallId),
       );
 
-      await sendMessage(ctx.threadId, [toolResultMessage], onComplete);
+      const nextMessages =
+        Array.isArray(messages) && messages.length > 0
+          ? messages
+          : [toolResultMessage];
+      const nextRunInput = {
+        ...(ctx.runInput || {}),
+        forwardedProps: {
+          ...(((ctx.runInput || {}).forwardedProps as Record<string, unknown>) ||
+            {}),
+          frontendToolResume: {
+            toolCallId,
+          },
+        },
+      };
+
+      await sendMessage(
+        ctx.threadId,
+        nextMessages,
+        onComplete,
+        nextRunInput,
+      );
     },
     [sendMessage, generateId],
   );

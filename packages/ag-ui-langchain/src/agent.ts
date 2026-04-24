@@ -358,6 +358,7 @@ export class LangGraphAgent {
   protected *handleReasoningEvent(
     reasoningData: LangGraphReasoning | null,
     encryptedData: string | null,
+    parentMessageId?: string | null,
   ): Generator<BaseEvent> {
     if (!this.activeRun) return;
 
@@ -404,7 +405,7 @@ export class LangGraphAgent {
 
       // Start reasoning if not started
       if (!this.activeRun.reasoning_process) {
-        const messageId = uuid();
+        const messageId = parentMessageId || uuid();
         const ev = this._dispatchEvent({
           type: EventType.REASONING_START,
           messageId,
@@ -735,7 +736,7 @@ export class LangGraphAgent {
 
     const stream = this.graph.streamEvents(kwargs.input, {
       version: "v2" as any,
-      ...(kwargs.config ? { config: kwargs.config } : {}),
+      ...(kwargs.config ?? {}),
     });
 
     return { stream, state, config };
@@ -786,6 +787,7 @@ export class LangGraphAgent {
         const stream = this.graph.streamEvents(streamInput, {
           version: "v2" as any,
           ...(fork as Record<string, unknown>),
+          ...(Object.keys(config).length > 0 ? config : {}),
         });
 
         return { stream, state: timeTravelCheckpoint.values, config };
@@ -799,6 +801,7 @@ export class LangGraphAgent {
     const agentState: State = { messages };
     const stream = this.graph.streamEvents(agentState, {
       version: "v2" as any,
+      ...(Object.keys(config).length > 0 ? config : {}),
     });
     return { stream, state: agentState, config };
   }
@@ -910,6 +913,7 @@ export class LangGraphAgent {
       state_reliable: true,
       reasoning_process: null,
       manually_emitted_state: null,
+        wait_for_frontend_tool: false,
     };
 
     try {
@@ -982,9 +986,7 @@ export class LangGraphAgent {
 
         stream = this.graph.streamEvents(streamState, {
           version: "v2" as any,
-          ...(Object.keys(this._config).length > 0
-            ? { configurable: this._config }
-            : {}),
+          ...(Object.keys(config).length > 0 ? config : {}),
         });
       }
 
@@ -1170,6 +1172,10 @@ export class LangGraphAgent {
         )) {
           yield agUiEvent;
         }
+
+        if (this.activeRun.wait_for_frontend_tool) {
+          break;
+        }
       }
 
       // ── Post-stream: check state for interrupts and final node ──
@@ -1269,25 +1275,20 @@ export class LangGraphAgent {
 
       const currentStream = this.getMessageInProgress(runId);
       const hasCurrentStream = !!(currentStream && currentStream.id);
-      const toolCallData = toolCallChunks.length > 0 ? toolCallChunks[0] : null;
+      const hasToolCallChunks = toolCallChunks.length > 0;
 
       // predict_state metadata check
       const predictStateMeta: any[] = metadata.predict_state ?? [];
       let toolCallUsedToPredictState = false;
-      if (toolCallData?.name && predictStateMeta.length > 0) {
-        toolCallUsedToPredictState = predictStateMeta.some(
-          (p: any) => (p?.tool ?? p) === toolCallData.name,
+      if (hasToolCallChunks && predictStateMeta.length > 0) {
+        toolCallUsedToPredictState = predictStateMeta.some((p: any) =>
+          toolCallChunks.some(
+            (toolCallData: any) => (p?.tool ?? p) === toolCallData?.name,
+          ),
         );
       }
 
-      const isToolCallStartEvent =
-        !hasCurrentStream && toolCallData && toolCallData.name;
-      const isToolCallArgsEvent =
-        hasCurrentStream && currentStream?.tool_call_id && toolCallData?.args;
-      const isToolCallEndEvent =
-        hasCurrentStream && currentStream?.tool_call_id && !toolCallData;
-
-      if (isToolCallStartEvent || isToolCallEndEvent || isToolCallArgsEvent) {
+      if (hasToolCallChunks) {
         this.activeRun.has_function_streaming = true;
       }
 
@@ -1305,27 +1306,37 @@ export class LangGraphAgent {
 
       // Use `is not None` semantics: empty string "" is valid content
       const isMessageContentEvent =
-        toolCallData == null && messageContent !== null;
+        !hasToolCallChunks && messageContent !== null;
+      const hasActiveToolCalls = Boolean(
+        currentStream?.active_tool_calls &&
+        Object.keys(currentStream.active_tool_calls).length > 0,
+      );
       const isMessageEndEvent =
-        hasCurrentStream &&
-        !currentStream?.tool_call_id &&
-        !isMessageContentEvent;
+        hasCurrentStream && !hasActiveToolCalls && !isMessageContentEvent;
 
       // Handle reasoning
       if (reasoningData) {
-        yield* this.handleReasoningEvent(reasoningData, null);
+        yield* this.handleReasoningEvent(
+          reasoningData,
+          null,
+          currentStream?.id ?? chunkId,
+        );
         return;
       }
 
       // Handle encrypted reasoning
       if (encryptedReasoningData && this.activeRun.reasoning_process) {
-        yield* this.handleReasoningEvent(null, encryptedReasoningData);
+        yield* this.handleReasoningEvent(
+          null,
+          encryptedReasoningData,
+          currentStream?.id ?? chunkId,
+        );
         return;
       }
 
       // Reasoning ended (no more reasoning data but process was active)
       if (!reasoningData && this.activeRun.reasoning_process) {
-        yield* this.handleReasoningEvent(null, null);
+        yield* this.handleReasoningEvent(null, null, currentStream?.id ?? chunkId);
       }
 
       // predict_state custom event
@@ -1336,17 +1347,6 @@ export class LangGraphAgent {
           value: predictStateMeta,
         } as BaseEvent);
         if (ev) yield ev;
-      }
-
-      // ── Tool call END ──
-      if (isToolCallEndEvent) {
-        const ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_END,
-          toolCallId: currentStream!.tool_call_id,
-        } as BaseEvent);
-        if (ev) yield ev;
-        this.messagesInProgress[runId] = null;
-        return;
       }
 
       // ── Message END ──
@@ -1360,35 +1360,68 @@ export class LangGraphAgent {
         return;
       }
 
-      // ── Tool call START ──
-      if (isToolCallStartEvent && shouldEmitToolCalls) {
-        const ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_START,
-          toolCallId: toolCallData.id ?? uuid(),
-          toolCallName: toolCallData.name,
-          parentMessageId: chunkId,
-        } as BaseEvent);
-        if (ev) yield ev;
+      // ── Tool call STREAM ──
+      if (hasToolCallChunks && shouldEmitToolCalls) {
+        const parentMessageId = currentStream?.id ?? chunkId;
+        const toolCallInfoByIndex = {
+          ...(currentStream?.tool_call_info_by_index ?? {}),
+        };
+        const activeToolCalls = {
+          ...(currentStream?.active_tool_calls ?? {}),
+        };
+
+        for (const toolCallData of toolCallChunks) {
+          const index =
+            typeof toolCallData?.index === "number" ? toolCallData.index : 0;
+          const cachedToolCallInfo = toolCallInfoByIndex[index];
+          const toolCallId =
+            toolCallData?.id ?? cachedToolCallInfo?.id ?? uuid();
+          const toolCallName =
+            toolCallData?.name ?? cachedToolCallInfo?.name ?? "unknown";
+
+          toolCallInfoByIndex[index] = {
+            id: toolCallId,
+            name: toolCallName,
+          };
+
+          if (toolCallData?.name && !activeToolCalls[toolCallId]) {
+            const startEv = this._dispatchEvent({
+              type: EventType.TOOL_CALL_START,
+              toolCallId,
+              toolCallName,
+              parentMessageId,
+            } as BaseEvent);
+            if (startEv) yield startEv;
+            activeToolCalls[toolCallId] = {
+              name: toolCallName,
+              index,
+            };
+          }
+
+          if (
+            toolCallData?.args !== undefined &&
+            toolCallData?.args !== null &&
+            toolCallData?.args !== ""
+          ) {
+            const argsEv = this._dispatchEvent({
+              type: EventType.TOOL_CALL_ARGS,
+              toolCallId,
+              delta:
+                typeof toolCallData.args === "string"
+                  ? toolCallData.args
+                  : JSON.stringify(toolCallData.args),
+            } as BaseEvent);
+            if (argsEv) yield argsEv;
+          }
+        }
 
         this.setMessageInProgress(runId, {
-          id: chunkId,
-          tool_call_id: toolCallData.id ?? uuid(),
-          tool_call_name: toolCallData.name,
+          id: parentMessageId,
+          tool_call_id: null,
+          tool_call_name: null,
+          tool_call_info_by_index: toolCallInfoByIndex,
+          active_tool_calls: activeToolCalls,
         });
-        return;
-      }
-
-      // ── Tool call ARGS ──
-      if (isToolCallArgsEvent && shouldEmitToolCalls) {
-        const ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_ARGS,
-          toolCallId: currentStream!.tool_call_id,
-          delta:
-            typeof toolCallData.args === "string"
-              ? toolCallData.args
-              : JSON.stringify(toolCallData.args),
-        } as BaseEvent);
-        if (ev) yield ev;
         return;
       }
 
@@ -1409,6 +1442,8 @@ export class LangGraphAgent {
             id: chunkId,
             tool_call_id: null,
             tool_call_name: null,
+            tool_call_info_by_index: {},
+            active_tool_calls: {},
           });
         }
 
@@ -1428,15 +1463,26 @@ export class LangGraphAgent {
     // ── on_chat_model_end ──
     if (eventType === LangGraphEventTypes.OnChatModelEnd) {
       const currentStream = this.getMessageInProgress(runId);
-      if (currentStream?.tool_call_id) {
-        const ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_END,
-          toolCallId: currentStream.tool_call_id,
-        } as BaseEvent);
-        if (ev) {
-          this.messagesInProgress[runId] = null;
-          yield ev;
+      const activeToolCalls = currentStream?.active_tool_calls ?? {};
+      const activeToolCallIds = Object.keys(activeToolCalls);
+      if (activeToolCallIds.length > 0) {
+        for (const toolCallId of activeToolCallIds) {
+          const ev = this._dispatchEvent({
+            type: EventType.TOOL_CALL_END,
+            toolCallId,
+          } as BaseEvent);
+          if (ev) {
+            yield ev;
+          }
         }
+        if (
+          activeToolCallIds.some((toolCallId) =>
+            frontendToolNames.has(activeToolCalls[toolCallId]?.name ?? ""),
+          )
+        ) {
+          this.activeRun.wait_for_frontend_tool = true;
+        }
+        this.messagesInProgress[runId] = null;
       } else if (currentStream?.id) {
         const ev = this._dispatchEvent({
           type: EventType.TEXT_MESSAGE_END,
@@ -1552,13 +1598,14 @@ export class LangGraphAgent {
         for (const toolMsg of toolMessages) {
           const toolCallId = toolMsg.tool_call_id;
           if (!toolCallId) continue;
+          const toolCallName = toolMsg.name ?? event.name ?? "";
 
           if (!this.activeRun.has_function_streaming) {
             let ev: BaseEvent | null;
             ev = this._dispatchEvent({
               type: EventType.TOOL_CALL_START,
               toolCallId,
-              toolCallName: toolMsg.name ?? event.name ?? "",
+              toolCallName,
               parentMessageId: toolMsg.id,
             } as BaseEvent);
             if (ev) yield ev;
@@ -1575,6 +1622,11 @@ export class LangGraphAgent {
               toolCallId,
             } as BaseEvent);
             if (ev) yield ev;
+          }
+
+          if (frontendToolNames.has(toolCallName)) {
+            this.activeRun.wait_for_frontend_tool = true;
+            continue;
           }
 
           const resultEv = this._dispatchEvent({
@@ -1604,13 +1656,14 @@ export class LangGraphAgent {
 
       const toolCallId = toolCallOutput.tool_call_id;
       if (!toolCallId) return;
+      const toolCallName = toolCallOutput.name ?? event.name ?? "";
 
       if (!this.activeRun.has_function_streaming) {
         let ev: BaseEvent | null;
         ev = this._dispatchEvent({
           type: EventType.TOOL_CALL_START,
           toolCallId,
-          toolCallName: toolCallOutput.name ?? event.name ?? "",
+          toolCallName,
           parentMessageId: toolCallOutput.id,
         } as BaseEvent);
         if (ev) yield ev;
@@ -1627,6 +1680,14 @@ export class LangGraphAgent {
           toolCallId,
         } as BaseEvent);
         if (ev) yield ev;
+      }
+
+      if (frontendToolNames.has(toolCallName)) {
+        this.activeRun.model_made_tool_call = false;
+        this.activeRun.state_reliable = true;
+        this.activeRun.has_function_streaming = false;
+        this.activeRun.wait_for_frontend_tool = true;
+        return;
       }
 
       const resultEv = this._dispatchEvent({

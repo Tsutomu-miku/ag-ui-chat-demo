@@ -27,23 +27,28 @@ export type AgentHandler = (
  */
 export interface EndpointOptions {
   /** Transform input before passing to the handler (e.g. hydrate history) */
-  transformInput?: (input: RunAgentInput) => RunAgentInput | Promise<RunAgentInput>;
+  transformInput?: (
+    input: RunAgentInput,
+  ) => RunAgentInput | Promise<RunAgentInput>;
   /** Called after a successful run with the collected events */
   onComplete?: (
     threadId: string,
     inputMessages: RunAgentInput["messages"],
     events: BaseEvent[],
+    runInput: RunAgentInput,
   ) => void | Promise<void>;
   /** Called when the stream errors */
   onError?: (
     threadId: string,
     error: unknown,
     events: BaseEvent[],
+    runInput: RunAgentInput,
   ) => void | Promise<void>;
   /** Called when the client aborts */
   onAbort?: (
     threadId: string,
     events: BaseEvent[],
+    runInput: RunAgentInput,
   ) => void | Promise<void>;
   /** Optional logger */
   logger?: {
@@ -120,20 +125,18 @@ export function createAgentEndpoint(
 
       stream.onAbort(() => {
         abortController.abort();
-        const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+        const durationMs =
+          Math.round((performance.now() - startedAt) * 100) / 100;
         log?.warn("agent stream aborted", {
           threadId: input.threadId,
           eventCount: events.length,
           durationMs,
         });
-        options.onAbort?.(input.threadId, events);
+        options.onAbort?.(input.threadId, events, runInput);
       });
 
       try {
-        for await (const event of handler(
-          runInput,
-          abortController.signal,
-        )) {
+        for await (const event of handler(runInput, abortController.signal)) {
           if (abortController.signal.aborted) break;
           events.push(event);
           await stream.write(encoder.encode(event));
@@ -144,8 +147,10 @@ export function createAgentEndpoint(
             input.threadId,
             input.messages,
             events,
+            runInput,
           );
-          const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+          const durationMs =
+            Math.round((performance.now() - startedAt) * 100) / 100;
           log?.info("agent run completed", {
             threadId: input.threadId,
             eventCount: events.length,
@@ -153,7 +158,8 @@ export function createAgentEndpoint(
           });
         }
       } catch (error) {
-        const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+        const durationMs =
+          Math.round((performance.now() - startedAt) * 100) / 100;
         log?.error("agent stream failed", {
           threadId: input.threadId,
           eventCount: events.length,
@@ -164,14 +170,13 @@ export function createAgentEndpoint(
         if (events[events.length - 1]?.type !== EventType.RUN_ERROR) {
           const errorEvent: BaseEvent & { message: string } = {
             type: EventType.RUN_ERROR,
-            message:
-              error instanceof Error ? error.message : String(error),
+            message: error instanceof Error ? error.message : String(error),
           };
           events.push(errorEvent);
           await stream.write(encoder.encode(errorEvent));
         }
 
-        await options.onError?.(input.threadId, error, events);
+        await options.onError?.(input.threadId, error, events, runInput);
       }
     });
   });

@@ -65,12 +65,23 @@ export type MessageInProgress = {
   id: string;
   tool_call_id?: string | null;
   tool_call_name?: string | null;
+  tool_call_info_by_index?: Record<
+    number,
+    {
+      id: string;
+      name: string;
+    }
+  >;
+  active_tool_calls?: Record<
+    string,
+    {
+      name: string;
+      index: number;
+    }
+  >;
 };
 
-export type MessagesInProgressRecord = Record<
-  string,
-  MessageInProgress | null
->;
+export type MessagesInProgressRecord = Record<string, MessageInProgress | null>;
 
 // ── Run metadata (aligned with Python RunMetadata TypedDict) ──
 
@@ -89,6 +100,7 @@ export type RunMetadata = {
   state_reliable?: boolean;
   manually_emitted_state?: State | null;
   reasoning_process?: ThinkingProcess | null;
+  wait_for_frontend_tool?: boolean;
 };
 
 // ── Prepared stream (from prepare_stream) ──
@@ -106,6 +118,8 @@ export type ForwardedProps = {
   node_name?: string | null;
   command?: { resume?: any } | null;
   stream_subgraphs?: boolean;
+  frontendToolResume?: { toolCallId?: string } | null;
+  frontend_tool_resume?: { tool_call_id?: string; toolCallId?: string } | null;
   [key: string]: unknown;
 };
 
@@ -127,11 +141,10 @@ export type BaseLangGraphPlatformMessage = {
   id: string;
 };
 
-export type LangGraphPlatformResultMessage =
-  BaseLangGraphPlatformMessage & {
-    tool_call_id: string;
-    name: string;
-  };
+export type LangGraphPlatformResultMessage = BaseLangGraphPlatformMessage & {
+  tool_call_id: string;
+  name: string;
+};
 
 export type LangGraphPlatformActionExecutionMessage =
   BaseLangGraphPlatformMessage & {

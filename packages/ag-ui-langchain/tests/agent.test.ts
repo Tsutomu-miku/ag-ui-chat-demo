@@ -34,6 +34,7 @@ function makeInput(overrides?: Partial<RunAgentInput>): RunAgentInput {
     threadId: "thread-1",
     runId: "run-1",
     messages: [{ id: "msg-1", role: "user", content: "Hello" }],
+    context: [],
     tools: [],
     ...overrides,
   };
@@ -66,6 +67,36 @@ function createMockGraph(events: Array<{
       }
       return generate();
     },
+  };
+}
+
+function createInspectableGraph(
+  events: Array<{
+    event: string;
+    name?: string;
+    data?: any;
+    metadata?: Record<string, any>;
+    run_id?: string;
+  }>,
+) {
+  const streamEvents = vi.fn((_input: any, _options: any) => {
+    async function* generate() {
+      for (const ev of events) {
+        yield {
+          event: ev.event,
+          name: ev.name ?? "",
+          data: ev.data ?? {},
+          metadata: ev.metadata ?? {},
+          run_id: ev.run_id,
+        };
+      }
+    }
+    return generate();
+  });
+
+  return {
+    nodes: {},
+    streamEvents,
   };
 }
 
@@ -160,6 +191,60 @@ function toolCallStreamEvents(
   ];
 }
 
+function multiToolCallStreamEvents(
+  toolCalls: Array<{
+    toolName: string;
+    toolCallId: string;
+    args: Record<string, unknown>;
+    index: number;
+  }>,
+  nodeId = "callModel",
+  messageId = "ai-msg-1",
+): Array<any> {
+  return [
+    {
+      event: LangGraphEventTypes.OnChatModelStream,
+      name: "ChatOpenAI",
+      data: {
+        chunk: new AIMessageChunk({
+          id: messageId,
+          content: "",
+          tool_call_chunks: toolCalls.map((toolCall) => ({
+            id: toolCall.toolCallId,
+            index: toolCall.index,
+            name: toolCall.toolName,
+            args: "",
+          })),
+        }),
+      },
+      metadata: { langgraph_node: nodeId },
+    },
+    {
+      event: LangGraphEventTypes.OnChatModelStream,
+      name: "ChatOpenAI",
+      data: {
+        chunk: new AIMessageChunk({
+          id: messageId,
+          content: "",
+          tool_call_chunks: toolCalls.map((toolCall) => ({
+            id: toolCall.toolCallId,
+            index: toolCall.index,
+            name: "",
+            args: JSON.stringify(toolCall.args),
+          })),
+        }),
+      },
+      metadata: { langgraph_node: nodeId },
+    },
+    {
+      event: LangGraphEventTypes.OnChatModelEnd,
+      name: "ChatOpenAI",
+      data: {},
+      metadata: { langgraph_node: nodeId },
+    },
+  ];
+}
+
 function toolEndEvent(
   toolName: string,
   toolCallId: string,
@@ -201,6 +286,51 @@ describe("LangGraphAgent", () => {
       config: { thread_id: "t-1" },
     });
     expect(agent.description).toBe("A test agent");
+  });
+
+  it("passes runtime config through streamEvents config", async () => {
+    const graph = createInspectableGraph([]);
+    const agent = new LangGraphAgent({
+      name: "agent",
+      graph: graph as any,
+      config: { recursionLimit: 1000, signal: "sig" as any },
+    });
+
+    await collectEvents(agent.clone().run(makeInput()));
+
+    expect(graph.streamEvents).toHaveBeenCalledTimes(1);
+    expect(graph.streamEvents.mock.calls[0][1]).toMatchObject({
+      version: "v2",
+      recursionLimit: 1000,
+      signal: "sig",
+      configurable: expect.objectContaining({
+        thread_id: "thread-1",
+      }),
+    });
+    expect(graph.streamEvents.mock.calls[0][1]).not.toHaveProperty("config");
+  });
+
+  it("passes runtime config through prepareStream streamEvents options", async () => {
+    const graph = createInspectableGraph([]) as any;
+    graph.getState = vi.fn(async () => ({ values: { messages: [] } }));
+    const agent = new LangGraphAgent({
+      name: "agent",
+      graph,
+      config: { recursionLimit: 1000, signal: "sig" as any },
+    });
+
+    await collectEvents(agent.clone().run(makeInput()));
+
+    expect(graph.streamEvents).toHaveBeenCalledTimes(1);
+    expect(graph.streamEvents.mock.calls[0][1]).toMatchObject({
+      version: "v2",
+      recursionLimit: 1000,
+      signal: "sig",
+      configurable: expect.objectContaining({
+        thread_id: "thread-1",
+      }),
+    });
+    expect(graph.streamEvents.mock.calls[0][1]).not.toHaveProperty("config");
   });
 
   it("clone() returns a new instance with same graph", () => {
@@ -347,6 +477,41 @@ describe("event translation: tool calls", () => {
     expect(types).toContain(EventType.TOOL_CALL_ARGS);
     expect(types).toContain(EventType.TOOL_CALL_END);
     expect(types).toContain(EventType.TOOL_CALL_RESULT);
+  });
+
+  it("keeps multiple streamed task tool calls separated by toolCallId", async () => {
+    const graph = createMockGraph(
+      multiToolCallStreamEvents([
+        {
+          toolName: "task",
+          toolCallId: "tc-task-svg",
+          index: 0,
+          args: { description: "svg-generator", subagent_type: "svg-generator" },
+        },
+        {
+          toolName: "task",
+          toolCallId: "tc-task-audio",
+          index: 1,
+          args: { description: "audio-composer", subagent_type: "audio-composer" },
+        },
+      ]),
+    );
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const starts = events.filter((e) => e.type === EventType.TOOL_CALL_START) as any[];
+    const args = events.filter((e) => e.type === EventType.TOOL_CALL_ARGS) as any[];
+    const ends = events.filter((e) => e.type === EventType.TOOL_CALL_END) as any[];
+
+    expect(starts.map((e) => e.toolCallId)).toEqual(["tc-task-svg", "tc-task-audio"]);
+    expect(args).toHaveLength(2);
+    expect(args[0].toolCallId).toBe("tc-task-svg");
+    expect(args[0].delta).toContain("svg-generator");
+    expect(args[0].delta).not.toContain("audio-composer");
+    expect(args[1].toolCallId).toBe("tc-task-audio");
+    expect(args[1].delta).toContain("audio-composer");
+    expect(args[1].delta).not.toContain("svg-generator");
+    expect(ends.map((e) => e.toolCallId)).toEqual(["tc-task-svg", "tc-task-audio"]);
   });
 });
 

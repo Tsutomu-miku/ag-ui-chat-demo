@@ -188,9 +188,43 @@ export function updateMessagesWithAgentEvent(
     case "step_finished":
       return messages;
 
+    case "reasoning_start":
+      return ensureAssistantMessage(messages, event.messageId, {
+        stepName: event.stepName,
+        parentStepName: event.parentStepName,
+      }).map((m) =>
+        m.id === event.messageId
+          ? {
+              ...m,
+              reasoning: m.reasoning ?? "",
+              isReasoningStreaming: true,
+            }
+          : m,
+      );
+
+    case "reasoning_delta":
+      return ensureAssistantMessage(messages, event.messageId).map((m) =>
+        m.id === event.messageId
+          ? {
+              ...m,
+              reasoning: `${m.reasoning ?? ""}${event.delta}`,
+              isReasoningStreaming: true,
+            }
+          : m,
+      );
+
+    case "reasoning_end":
+      return messages.map((m) =>
+        m.id === event.messageId
+          ? { ...m, isReasoningStreaming: false }
+          : m,
+      );
+
     case "run_complete":
       return messages.map((m) =>
-        m.isStreaming ? { ...m, isStreaming: false } : m,
+        m.isStreaming || m.isReasoningStreaming
+          ? { ...m, isStreaming: false, isReasoningStreaming: false }
+          : m,
       );
   }
 }

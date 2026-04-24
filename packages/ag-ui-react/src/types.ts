@@ -35,6 +35,10 @@ export interface ChatMessage {
   toolCalls?: ToolCallFunction[];
   /** Whether the message is currently being streamed */
   isStreaming?: boolean;
+  /** Streaming reasoning text (chain-of-thought / thinking output) */
+  reasoning?: string;
+  /** Whether the reasoning stream is still in progress */
+  isReasoningStreaming?: boolean;
   /** AG-UI step metadata for tree rendering */
   stepName?: string;
   parentStepName?: string;
@@ -132,6 +136,21 @@ export type ThreadAgentEvent =
       type: "step_started";
       stepName: string;
       parentStepName?: string;
+    }
+  | {
+      type: "reasoning_start";
+      messageId: string;
+      stepName?: string;
+      parentStepName?: string;
+    }
+  | {
+      type: "reasoning_delta";
+      messageId: string;
+      delta: string;
+    }
+  | {
+      type: "reasoning_end";
+      messageId: string;
     }
   | {
       type: "step_finished";

@@ -36,6 +36,8 @@ async function parseJsonResponse<T>(res: Response): Promise<T | null> {
 export interface UseThreadsOptions {
   /** Base URL for the history API. Default: "/api/history" */
   historyApiUrl?: string;
+  /** Optional headers for history API requests */
+  headers?: Record<string, string>;
   /** Generate a unique ID (defaults to crypto.randomUUID) */
   generateId?: () => string;
 }
@@ -66,7 +68,7 @@ export interface UseThreadsReturn {
     threadId: string,
     toolCallId: string,
     result: string,
-  ) => void;
+  ) => ChatMessage;
   /** Process a ThreadAgentEvent — updates messages and step tracking */
   handleThreadEvent: (threadId: string, event: ThreadAgentEvent) => void;
 }
@@ -91,8 +93,24 @@ const defaultGenerateId = () => crypto.randomUUID();
  */
 export function useThreads({
   historyApiUrl = "/api/history",
+  headers,
   generateId = defaultGenerateId,
 }: UseThreadsOptions = {}): UseThreadsReturn {
+  const fetchWithHeaders = useCallback(
+    (url: string, init?: RequestInit) => {
+      const hasInit = Boolean(init && Object.keys(init).length > 0);
+      if (!headers && !hasInit) {
+        return fetch(url);
+      }
+
+      return fetch(url, {
+        ...(init || {}),
+        ...(headers ? { headers: { ...(init?.headers || {}), ...headers } } : {}),
+      });
+    },
+    [headers],
+  );
+
   const [list, setList] = useState<ThreadSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [active, setActive] = useState<ChatThread | null>(null);
@@ -113,14 +131,14 @@ export function useThreads({
   // Fetch thread list on mount
   const refreshList = useCallback(async () => {
     try {
-      const res = await fetch(`${historyApiUrl}/threads`);
+      const res = await fetchWithHeaders(`${historyApiUrl}/threads`);
       const data = await parseJsonResponse<ThreadSummary[]>(res);
       setList(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("Failed to fetch threads:", e);
       setList([]);
     }
-  }, [historyApiUrl]);
+  }, [fetchWithHeaders, historyApiUrl]);
 
   useEffect(() => {
     void refreshList();
@@ -130,14 +148,14 @@ export function useThreads({
     async (id: string) => {
       setActiveId(id);
       try {
-        const res = await fetch(`${historyApiUrl}/threads/${id}`);
+        const res = await fetchWithHeaders(`${historyApiUrl}/threads/${id}`);
         const thread = await parseJsonResponse<ChatThread>(res);
         if (thread) setActiveThread(thread);
       } catch (e) {
         console.error("Failed to fetch thread:", e);
       }
     },
-    [historyApiUrl, setActiveThread],
+    [fetchWithHeaders, historyApiUrl, setActiveThread],
   );
 
   const select = useCallback(
@@ -214,16 +232,18 @@ export function useThreads({
 
   const appendToolResult = useCallback(
     (threadId: string, toolCallId: string, result: string) => {
+      const message: ChatMessage = {
+        id: generateId(),
+        role: "tool",
+        content: result,
+        toolCallId,
+        createdAt: now(),
+      };
       handleThreadEvent(threadId, {
         type: "append_message",
-        message: {
-          id: generateId(),
-          role: "tool",
-          content: result,
-          toolCallId,
-          createdAt: now(),
-        },
+        message,
       });
+      return message;
     },
     [handleThreadEvent, generateId],
   );
@@ -231,14 +251,16 @@ export function useThreads({
   const remove = useCallback(
     async (id: string) => {
       try {
-        await fetch(`${historyApiUrl}/threads/${id}`, { method: "DELETE" });
+        await fetchWithHeaders(`${historyApiUrl}/threads/${id}`, {
+          method: "DELETE",
+        });
         setList((prev) => prev.filter((t) => t.id !== id));
         if (activeId === id) setActiveThread(null);
       } catch (e) {
         console.error("Failed to delete thread:", e);
       }
     },
-    [activeId, setActiveThread, historyApiUrl],
+    [activeId, fetchWithHeaders, setActiveThread, historyApiUrl],
   );
 
   return {
