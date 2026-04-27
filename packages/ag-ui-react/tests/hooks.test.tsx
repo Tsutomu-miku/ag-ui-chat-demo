@@ -235,7 +235,7 @@ describe("useAgentChat", () => {
         } satisfies ThreadAgentEvent,
       ],
     ]);
-    expect(onComplete).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledTimes(1);
     expect(hook.result.current.pendingToolCalls).toEqual([
       {
         toolCallId: "tool-1",
@@ -328,7 +328,7 @@ describe("useAgentChat", () => {
       },
     ]);
     expect(hook.result.current.pendingToolCalls).toEqual([]);
-    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledTimes(2);
     hook.unmount();
   });
 

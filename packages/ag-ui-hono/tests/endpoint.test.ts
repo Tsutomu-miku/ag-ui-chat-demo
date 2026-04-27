@@ -183,6 +183,11 @@ describe("createAgentEndpoint", () => {
       expect.arrayContaining([
         expect.objectContaining({ type: EventType.RUN_STARTED }),
       ]),
+      expect.objectContaining({
+        threadId: "t1",
+        runId: "r1",
+        messages: [{ id: "u1", role: "user", content: "hi" }],
+      }),
     );
   });
 
@@ -213,6 +218,11 @@ describe("createAgentEndpoint", () => {
       expect.arrayContaining([
         expect.objectContaining({ type: EventType.RUN_STARTED }),
       ]),
+      expect.objectContaining({
+        threadId: "t1",
+        runId: "r1",
+        messages: [{ id: "u1", role: "user", content: "hi" }],
+      }),
     );
   });
 });
