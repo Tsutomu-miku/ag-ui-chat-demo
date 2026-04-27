@@ -157,7 +157,7 @@ describe("useAgentChat", () => {
     await act(async () => {
       await hook.result.current.sendMessage(
         "thread-1",
-        [{ role: "user", content: "Hi" }],
+        [{ id: "user-0", role: "user", content: "Hi", createdAt: "now" }],
         onComplete,
       );
     });
@@ -166,7 +166,7 @@ describe("useAgentChat", () => {
     expect(agentInstances[0]?.threadId).toBe("thread-1");
     expect(agentInstances[0]?.messages).toEqual([
       {
-        id: "generated-id",
+        id: "user-0",
         role: "user",
         content: "Hi",
       },
@@ -295,7 +295,7 @@ describe("useAgentChat", () => {
     await act(async () => {
       await hook.result.current.sendMessage(
         "thread-2",
-        [{ id: "user-1", role: "user", content: "Ship it" }],
+        [{ id: "user-1", role: "user", content: "Ship it", createdAt: "now" }],
         onComplete,
       );
       await firstRun.promise;
@@ -342,7 +342,7 @@ describe("useAgentChat", () => {
     await act(async () => {
       await hook.result.current.sendMessage(
         "thread-stop",
-        [{ role: "user", content: "Hello" }],
+        [{ id: "user-stop", role: "user", content: "Hello", createdAt: "now" }],
         async () => {},
       );
     });
