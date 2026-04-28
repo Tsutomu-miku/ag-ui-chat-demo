@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterObjectBySchemaKeys,
   getStreamPayloadInput,
-} from "../src/convert.js";
+} from "../src/utils/convert.js";
 
 describe("filterObjectBySchemaKeys", () => {
   it("filters object to only include specified keys", () => {

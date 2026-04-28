@@ -14,11 +14,13 @@ AG-UI protocol HTTP endpoint adapter for [Hono](https://hono.dev/) — TypeScrip
 
 ```ts
 import { createAgentEndpoint } from "ag-ui-hono";
-import { createAgentLoop } from "ag-ui-langchain";
+import { LangGraphAgent } from "ag-ui-langgraph";
+
+const agent = new LangGraphAgent({ name: "agent", graph });
 
 // Create the endpoint
 const agentApp = createAgentEndpoint(
-  (input, signal) => createAgentLoop(input, { model, tools }, signal),
+  (input, signal) => agent.clone().run(input),
   {
     transformInput: (input) => ({
       ...input,

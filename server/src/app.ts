@@ -6,6 +6,7 @@ import { requestLogger } from "./http/middleware/requestLogger.js";
 import { agentRouter } from "./http/routes/agent.js";
 import { healthRouter } from "./http/routes/health.js";
 import { historyRouter } from "./http/routes/history.js";
+import { protocolDemoRouter } from "./http/routes/protocol-demo.js";
 
 const logger = createLogger("app");
 
@@ -24,6 +25,7 @@ export function createApp() {
   );
 
   app.route("/api/agent", agentRouter);
+  app.route("/api/protocol-demo", protocolDemoRouter);
   app.route("/api/health", healthRouter);
   app.route("/api/history", historyRouter);
 

@@ -14,7 +14,7 @@
  *
  * @example Using with a prebuilt graph
  * ```ts
- * import { LangGraphAgent } from "ag-ui-langchain";
+ * import { LangGraphAgent } from "ag-ui-langgraph";
  * import { createReactAgent as lgCreateReactAgent } from "@langchain/langgraph/prebuilt";
  *
  * const graph = lgCreateReactAgent({ llm: model, tools });
@@ -32,18 +32,16 @@ import {
   type Tool,
 } from "@ag-ui/core";
 import {
-  AIMessage,
   HumanMessage,
   SystemMessage,
   ToolMessage,
+  type BaseMessage,
 } from "@langchain/core/messages";
-import type { CompiledStateGraph } from "@langchain/langgraph";
-import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { Command, type CompiledStateGraph } from "@langchain/langgraph";
 import { v4 as uuid } from "uuid";
 
 import {
   contentToString,
-  frontendToolToModelTool,
   toLangChainMessages,
   langchainMessagesToAgui,
   resolveReasoningContent,
@@ -55,8 +53,7 @@ import {
   camelToSnake,
   normalizeToolContent,
   jsonSafeStringify,
-  makeJsonSafe,
-} from "./convert.js";
+} from "./utils/convert.js";
 import {
   DEFAULT_SCHEMA_KEYS,
   LangGraphEventTypes,
@@ -74,10 +71,20 @@ import type {
   PreparedStream,
   ForwardedProps,
 } from "./types.js";
-
-// ── Constants ──
-
-const ROOT_SUBGRAPH_NAME = "__root__";
+import {
+  ROOT_SUBGRAPH_NAME,
+  chunkGet,
+  collectInterrupts,
+  dumpJsonSafe,
+  getStreamArgs,
+  parseResumeInput,
+  sanitizeRawPayloads,
+} from "./utils/events.js";
+import { getGraphSchemaKeys } from "./utils/schema.js";
+import {
+  filterOrphanToolMessages,
+  mergeLangGraphState,
+} from "./utils/state.js";
 
 // ── Configuration types ──
 
@@ -91,60 +98,6 @@ export interface LangGraphAgentConfig {
   description?: string;
   /** Optional runnable config */
   config?: Record<string, unknown>;
-}
-
-/** Configuration for createReactAgent factory (convenience). */
-export interface ReactAgentConfig {
-  /** Display name for this agent */
-  name?: string;
-  /** The LangChain chat model */
-  model: BaseChatModel;
-  /** Backend tools (server-side execution) */
-  tools?: any[];
-  /** System prompt */
-  systemPrompt?: string;
-}
-
-/** Sub-agent definition for supervisor factory. */
-export interface SubAgentDefinition {
-  /** System prompt for the sub-agent */
-  systemPrompt: string;
-  /** Tools available to the sub-agent */
-  tools: any[];
-  /** Optional: override model for this sub-agent */
-  model?: BaseChatModel;
-}
-
-/** Configuration for createSupervisor factory. */
-export interface SupervisorConfig {
-  /** Display name */
-  name?: string;
-  /** The LangChain chat model */
-  model: BaseChatModel;
-  /** Backend tools the supervisor can call directly */
-  tools?: any[];
-  /** System prompt */
-  systemPrompt?: string;
-  /** Sub-agent definitions keyed by name */
-  subAgents: Record<string, SubAgentDefinition>;
-}
-
-// ── Helper: chunk property access (handles both dict and object) ──
-
-function chunkGet(chunk: any, key: string, defaultValue: any = undefined): any {
-  if (chunk == null) return defaultValue;
-  if (typeof chunk === "object" && key in chunk) return chunk[key];
-  return defaultValue;
-}
-
-// ── Helper: dump JSON safely ──
-
-function dumpJsonSafe(value: unknown): unknown {
-  try {
-    return makeJsonSafe(value);
-  } catch {
-    return String(value);
-  }
 }
 
 // ── LangGraphAgent class (fully aligned with Python v0.0.34) ──
@@ -173,10 +126,6 @@ export class LangGraphAgent {
 
   /** Protocol-internal state keys that are always included in schema */
   protected constantSchemaKeys: string[] = ["messages", "tools"];
-
-  /** Regex for orphan tool message detection */
-  private static readonly ORPHAN_TOOL_MSG_RE =
-    /^Error: No tool call found with id/;
 
   constructor(config: LangGraphAgentConfig) {
     this.name = config.name;
@@ -248,7 +197,7 @@ export class LangGraphAgent {
    * @returns The event to yield, or null to suppress it.
    */
   protected _dispatchEvent(event: BaseEvent): BaseEvent | null {
-    return event;
+    return sanitizeRawPayloads(event);
   }
 
   // ── Message-in-progress tracking ──
@@ -276,25 +225,11 @@ export class LangGraphAgent {
 
   protected getSchemaKeys(config: Record<string, any>): SchemaKeys {
     try {
-      const graph = this.graph as any;
-      const inputSchema =
-        graph.getInputJsonSchema?.(config) ?? graph.inputSchema?.() ?? {};
-      const outputSchema =
-        graph.getOutputJsonSchema?.(config) ?? graph.outputSchema?.() ?? {};
-
-      const inputKeys = inputSchema?.properties
-        ? Object.keys(inputSchema.properties)
-        : [];
-      const outputKeys = outputSchema?.properties
-        ? Object.keys(outputSchema.properties)
-        : [];
-
-      return {
-        input: [...inputKeys, ...this.constantSchemaKeys],
-        output: [...outputKeys, ...this.constantSchemaKeys],
-        config: [],
-        context: [],
-      };
+      return getGraphSchemaKeys({
+        graph: this.graph,
+        config,
+        constantSchemaKeys: this.constantSchemaKeys,
+      });
     } catch {
       return {
         input: this.constantSchemaKeys,
@@ -516,45 +451,13 @@ export class LangGraphAgent {
   // ── Orphan tool message filter (aligned with Python _filter_orphan_tool_messages) ──
 
   protected _filterOrphanToolMessages(messages: any[]): any[] {
-    // Find the index of the last HumanMessage
-    let lastHumanIdx = -1;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (
-        messages[i] instanceof HumanMessage ||
-        messages[i]?._getType?.() === "human"
-      ) {
-        lastHumanIdx = i;
-        break;
-      }
-    }
-
-    if (lastHumanIdx === -1) return messages;
-
-    const head = messages.slice(0, lastHumanIdx + 1);
-    const tail = messages.slice(lastHumanIdx + 1).filter((m) => {
-      if (
-        (m instanceof ToolMessage || m?._getType?.() === "tool") &&
-        typeof m.content === "string" &&
-        LangGraphAgent.ORPHAN_TOOL_MSG_RE.test(m.content)
-      ) {
-        return false;
-      }
-      return true;
-    });
-
-    return [...head, ...tail];
+    return filterOrphanToolMessages(messages);
   }
 
   // ── Interrupt collection (aligned with Python _collect_interrupts) ──
 
   protected static _collectInterrupts(tasks: any[] | null): any[] {
-    if (!tasks || tasks.length === 0) return [];
-    const interrupts: any[] = [];
-    for (const task of tasks) {
-      const taskInterrupts = task?.interrupts ?? [];
-      interrupts.push(...taskInterrupts);
-    }
-    return interrupts;
+    return collectInterrupts(tasks);
   }
 
   // ── Stream kwargs builder (aligned with Python get_stream_kwargs) ──
@@ -564,17 +467,9 @@ export class LangGraphAgent {
     config?: Record<string, any>;
     subgraphs?: boolean;
     version?: "v1" | "v2";
-  }): Record<string, any> {
-    const kwargs: Record<string, any> = {
-      input: opts.input,
-      version: opts.version ?? "v2",
-    };
-
-    if (opts.config) {
-      kwargs.config = opts.config;
-    }
-
-    return kwargs;
+    context?: Record<string, any>;
+  }): { input: any; options: Record<string, any> } {
+    return getStreamArgs(opts);
   }
 
   // ── Prepare stream (aligned with Python prepare_stream) ──
@@ -588,7 +483,7 @@ export class LangGraphAgent {
       throw new Error("prepareStream called outside an active run");
     }
 
-    const stateInput: State = (input as any).state ?? {};
+    const stateInput: State = { ...((input as any).state ?? {}) };
     const messages = input.messages ?? [];
     const forwardedProps: ForwardedProps = (input as any).forwarded_props ?? {};
     const threadId = input.threadId;
@@ -615,7 +510,7 @@ export class LangGraphAgent {
       agentState?.tasks ?? null,
     );
     const hasActiveInterrupts = interrupts.length > 0;
-    const resumeInput = forwardedProps.command?.resume ?? null;
+    const resumeInput = parseResumeInput(forwardedProps.command?.resume);
 
     // Schema introspection
     this.activeRun.schema_keys = this.getSchemaKeys(config);
@@ -697,9 +592,11 @@ export class LangGraphAgent {
       try {
         const graph = this.graph as any;
         if (typeof graph.updateState === "function") {
-          await graph.updateState(config, state, {
-            asNode: this.activeRun.node_name,
-          });
+          await graph.updateState(
+            config,
+            state,
+            this.activeRun.node_name ?? undefined,
+          );
         }
       } catch {
         // State update is best-effort
@@ -709,20 +606,16 @@ export class LangGraphAgent {
     // Build stream input
     let streamInput: any;
     if (resumeInput) {
-      // For Command resume — try to use LangGraph Command type
-      try {
-        const { Command } = require("@langchain/langgraph");
-        streamInput = new Command({ resume: resumeInput });
-      } catch {
-        streamInput = { resume: resumeInput };
-      }
+      streamInput = new Command({ resume: resumeInput });
     } else {
       const payloadInput = getStreamPayloadInput({
         mode: this.activeRun.mode ?? "start",
         state,
         schemaKeys: this.activeRun.schema_keys ?? undefined,
       });
-      streamInput = payloadInput ?? null;
+      streamInput = payloadInput
+        ? { ...forwardedProps, ...payloadInput }
+        : null;
     }
 
     const subgraphsEnabled = forwardedProps.stream_subgraphs !== false;
@@ -734,10 +627,7 @@ export class LangGraphAgent {
       version: "v2",
     });
 
-    const stream = this.graph.streamEvents(kwargs.input, {
-      version: "v2" as any,
-      ...(kwargs.config ?? {}),
-    });
+    const stream = this.graph.streamEvents(kwargs.input, kwargs.options as any);
 
     return { stream, state, config };
   }
@@ -770,12 +660,13 @@ export class LangGraphAgent {
 
       const nextNodes = timeTravelCheckpoint.next ?? [];
       const graph = this.graph as any;
+      const forwardedProps: ForwardedProps = (input as any).forwarded_props ?? {};
 
       if (typeof graph.updateState === "function") {
         const fork = await graph.updateState(
           timeTravelCheckpoint.config,
           timeTravelCheckpoint.values,
-          { asNode: nextNodes.length > 0 ? nextNodes[0] : "__start__" },
+          nextNodes.length > 0 ? nextNodes[0] : "__start__",
         );
 
         const streamInput = this.langgraphDefaultMergeState(
@@ -784,11 +675,19 @@ export class LangGraphAgent {
           input,
         );
 
-        const stream = this.graph.streamEvents(streamInput, {
-          version: "v2" as any,
-          ...(fork as Record<string, unknown>),
-          ...(Object.keys(config).length > 0 ? config : {}),
+        const kwargs = this.getStreamKwargs({
+          input: streamInput,
+          config: {
+            ...(Object.keys(config).length > 0 ? config : {}),
+            ...(fork as Record<string, unknown>),
+          },
+          subgraphs: forwardedProps.stream_subgraphs !== false,
+          version: "v2",
         });
+        const stream = this.graph.streamEvents(
+          kwargs.input,
+          kwargs.options as any,
+        );
 
         return { stream, state: timeTravelCheckpoint.values, config };
       }
@@ -798,11 +697,15 @@ export class LangGraphAgent {
 
     // Fallback: normal stream
     const messages = toLangChainMessages(input.messages);
-    const agentState: State = { messages };
-    const stream = this.graph.streamEvents(agentState, {
-      version: "v2" as any,
-      ...(Object.keys(config).length > 0 ? config : {}),
+    const agentState = this.langgraphDefaultMergeState({}, messages, input);
+    const forwardedProps: ForwardedProps = (input as any).forwarded_props ?? {};
+    const kwargs = this.getStreamKwargs({
+      input: agentState,
+      config: Object.keys(config).length > 0 ? config : undefined,
+      subgraphs: forwardedProps.stream_subgraphs !== false,
+      version: "v2",
     });
+    const stream = this.graph.streamEvents(kwargs.input, kwargs.options as any);
     return { stream, state: agentState, config };
   }
 
@@ -868,26 +771,10 @@ export class LangGraphAgent {
 
   protected langgraphDefaultMergeState(
     state: State,
-    messages: any[],
+    messages: BaseMessage[],
     input: RunAgentInput,
   ): State {
-    // Remove leading system messages
-    if (
-      messages.length > 0 &&
-      (messages[0] instanceof SystemMessage ||
-        messages[0]._getType?.() === "system")
-    ) {
-      messages = messages.slice(1);
-    }
-
-    const frontendTools: Tool[] = input.tools ?? [];
-    const result: State = { ...state, messages };
-
-    if (frontendTools.length > 0) {
-      result.tools = frontendTools.map(frontendToolToModelTool);
-    }
-
-    return result;
+    return mergeLangGraphState({ state, messages, input });
   }
 
   // ── Main event loop (fully aligned with Python _handle_stream_events) ──
@@ -896,7 +783,7 @@ export class LangGraphAgent {
     input: RunAgentInput & { forwarded_props?: ForwardedProps },
   ): AsyncGenerator<BaseEvent> {
     const threadId = input.threadId ?? uuid();
-    const runId = input.runId;
+    const runId = input.runId ?? uuid();
     const frontendTools: Tool[] = input.tools ?? [];
     const frontendToolNames = new Set(frontendTools.map((t) => t.name));
     const forwardedProps: ForwardedProps = (input as any).forwarded_props ?? {};
@@ -913,7 +800,7 @@ export class LangGraphAgent {
       state_reliable: true,
       reasoning_process: null,
       manually_emitted_state: null,
-        wait_for_frontend_tool: false,
+      wait_for_frontend_tool: false,
     };
 
     try {
@@ -978,16 +865,14 @@ export class LangGraphAgent {
       } else {
         // Direct stream (no checkpoint)
         const messages = toLangChainMessages(input.messages);
-        streamState = { messages } as State;
-
-        if (frontendTools.length > 0) {
-          streamState.tools = frontendTools.map(frontendToolToModelTool);
-        }
-
-        stream = this.graph.streamEvents(streamState, {
-          version: "v2" as any,
-          ...(Object.keys(config).length > 0 ? config : {}),
+        streamState = this.langgraphDefaultMergeState({}, messages, input);
+        const kwargs = this.getStreamKwargs({
+          input: streamState,
+          config: Object.keys(config).length > 0 ? config : undefined,
+          subgraphs: forwardedProps.stream_subgraphs !== false,
+          version: "v2",
         });
+        stream = this.graph.streamEvents(kwargs.input, kwargs.options as any);
       }
 
       // Emit RUN_STARTED
@@ -1713,52 +1598,4 @@ export class LangGraphAgent {
       return;
     }
   }
-}
-
-// ── Factory functions ──
-
-/**
- * Create an AG-UI agent from a LangGraph prebuilt react agent.
- *
- * This builds a real LangGraph `CompiledStateGraph` using
- * `@langchain/langgraph/prebuilt`'s `createReactAgent`, then wraps it
- * in a `LangGraphAgent`.
- */
-export function createReactAgent(config: ReactAgentConfig): LangGraphAgent {
-  const {
-    createReactAgent: lgCreateReactAgent,
-  } = require("@langchain/langgraph/prebuilt");
-
-  const graph = lgCreateReactAgent({
-    llm: config.model,
-    tools: config.tools ?? [],
-    ...(config.systemPrompt ? { prompt: config.systemPrompt } : {}),
-  });
-
-  return new LangGraphAgent({
-    name: config.name ?? "agent",
-    graph,
-  });
-}
-
-/**
- * Create a supervisor agent using LangGraph's prebuilt supervisor pattern.
- */
-export function createSupervisor(config: SupervisorConfig): LangGraphAgent {
-  const {
-    createReactAgent: lgCreateReactAgent,
-  } = require("@langchain/langgraph/prebuilt");
-
-  const allTools = [...(config.tools ?? [])];
-
-  const graph = lgCreateReactAgent({
-    llm: config.model,
-    tools: allTools,
-    ...(config.systemPrompt ? { prompt: config.systemPrompt } : {}),
-  });
-
-  return new LangGraphAgent({
-    name: config.name ?? "supervisor",
-    graph,
-  });
 }

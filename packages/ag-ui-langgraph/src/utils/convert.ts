@@ -21,7 +21,7 @@ import type {
   LangGraphReasoning,
   SchemaKeys,
   State,
-} from "./types.js";
+} from "../types.js";
 
 // ============================================================
 // Primitive helpers
@@ -86,7 +86,7 @@ export function parseToolArgs(
 // Schema key filtering (aligned with Python)
 // ============================================================
 
-const DEFAULT_SCHEMA_KEYS = ["tools"];
+const DEFAULT_SCHEMA_KEYS = ["tools", "ag-ui", "copilotkit"];
 
 export function filterObjectBySchemaKeys(
   obj: Record<string, unknown>,

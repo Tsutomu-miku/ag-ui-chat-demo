@@ -13,7 +13,13 @@
  */
 
 import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
-import { AIMessageChunk, ToolMessage as LCToolMessage, HumanMessage as LCHumanMessage } from "@langchain/core/messages";
+import {
+  AIMessage,
+  AIMessageChunk,
+  ToolMessage as LCToolMessage,
+  HumanMessage as LCHumanMessage,
+} from "@langchain/core/messages";
+import { Command } from "@langchain/langgraph";
 import { describe, expect, it, vi } from "vitest";
 
 import { LangGraphAgent, type LangGraphAgentConfig } from "../src/agent.js";
@@ -331,6 +337,59 @@ describe("LangGraphAgent", () => {
       }),
     });
     expect(graph.streamEvents.mock.calls[0][1]).not.toHaveProperty("config");
+  });
+
+  it("generates a runId when input omits one", async () => {
+    const graph = createMockGraph([]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+    const input = makeInput();
+    delete (input as Partial<RunAgentInput>).runId;
+
+    const events = await collectEvents(agent.clone().run(input));
+    const started = events.find((e) => e.type === EventType.RUN_STARTED) as any;
+    const finished = events.find((e) => e.type === EventType.RUN_FINISHED) as any;
+
+    expect(typeof started.runId).toBe("string");
+    expect(started.runId.length).toBeGreaterThan(0);
+    expect(finished.runId).toBe(started.runId);
+  });
+
+  it("passes stream_subgraphs through streamEvents options", async () => {
+    const graph = createInspectableGraph([]);
+    const agent = new LangGraphAgent({ name: "agent", graph: graph as any });
+    const input = makeInput();
+    (input as any).forwardedProps = { streamSubgraphs: false };
+
+    await collectEvents(agent.clone().run(input));
+
+    expect(graph.streamEvents.mock.calls[0][1]).toMatchObject({
+      version: "v2",
+      subgraphs: false,
+    });
+  });
+
+  it("reads input/output/config/context schema keys", () => {
+    class InspectAgent extends LangGraphAgent {
+      read(config: Record<string, any>) {
+        return this.getSchemaKeys(config);
+      }
+    }
+    const graph = {
+      nodes: {},
+      streamEvents: vi.fn(),
+      getInputJsonSchema: () => ({ properties: { messages: {}, topic: {} } }),
+      getOutputJsonSchema: () => ({ properties: { answer: {} } }),
+      configSchema: () => ({ schema: () => ({ properties: { locale: {} } }) }),
+      contextSchema: () => ({ schema: () => ({ properties: { userId: {} } }) }),
+    };
+    const agent = new InspectAgent({ name: "agent", graph: graph as any });
+
+    expect(agent.read({})).toEqual({
+      input: ["messages", "topic", "messages", "tools"],
+      output: ["answer", "messages", "tools"],
+      config: ["locale"],
+      context: ["userId"],
+    });
   });
 
   it("clone() returns a new instance with same graph", () => {
@@ -768,6 +827,25 @@ describe("RawEvent passthrough", () => {
     expect((rawEvents[0] as any).event).toBeDefined();
     expect((rawEvents[0] as any).event.event).toBe(LangGraphEventTypes.OnChatModelStream);
   });
+
+  it("serializes recursive RAW event payloads safely", async () => {
+    const recursive: any = { label: "cycle" };
+    recursive.self = recursive;
+    const graph = createMockGraph([
+      {
+        event: LangGraphEventTypes.OnCustomEvent,
+        name: "recursive",
+        data: recursive,
+        metadata: {},
+      },
+    ]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const rawEvent = events.find((e) => e.type === EventType.RAW) as any;
+
+    expect(rawEvent.event.data.self).toBe("<recursive>");
+  });
 });
 
 // ============================================================
@@ -860,6 +938,46 @@ describe("forwarded_props", () => {
     const events = await collectEvents(agent.clone().run(makeInput()));
     expect(events[0].type).toBe(EventType.RUN_STARTED);
     expect(events[events.length - 1].type).toBe(EventType.RUN_FINISHED);
+  });
+
+  it("short-circuits active interrupts when no resume command is provided", async () => {
+    const graph = createInspectableGraph([]) as any;
+    graph.getState = vi.fn(async () => ({
+      values: { messages: [] },
+      tasks: [{ interrupts: [{ value: { action: "confirm" } }] }],
+    }));
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+
+    expect(graph.streamEvents).not.toHaveBeenCalled();
+    expect(events.map((e) => e.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.CUSTOM,
+      EventType.RUN_FINISHED,
+    ]);
+    expect((events[1] as any).name).toBe(LangGraphEventTypes.OnInterrupt);
+    expect((events[1] as any).value).toEqual({ action: "confirm" });
+  });
+
+  it("uses Command input when resuming from forwarded_props.command.resume", async () => {
+    const graph = createInspectableGraph([]) as any;
+    graph.getState = vi.fn(async () => ({
+      values: { messages: [] },
+      tasks: [{ interrupts: [] }],
+    }));
+    const agent = new LangGraphAgent({ name: "agent", graph });
+    const input = makeInput();
+    (input as any).forwardedProps = {
+      command: { resume: "{\"approved\":true}" },
+    };
+
+    await collectEvents(agent.clone().run(input));
+
+    expect(graph.streamEvents.mock.calls[0][0]).toBeInstanceOf(Command);
+    expect((graph.streamEvents.mock.calls[0][0] as any).resume).toEqual({
+      approved: true,
+    });
   });
 });
 
@@ -979,6 +1097,91 @@ describe("orphan tool message filter", () => {
 
     const filtered = filterFn([humanMsg, toolMsg]);
     expect(filtered.length).toBe(2);
+  });
+});
+
+// ============================================================
+// State merge alignment
+// ============================================================
+
+describe("state merge alignment", () => {
+  it("dedupes checkpoint messages, repairs orphan tool content, and exposes ag-ui state", () => {
+    const agent = new LangGraphAgent({ name: "agent", graph: createMockGraph([]) });
+    const merge = (agent as any).langgraphDefaultMergeState.bind(agent);
+    const existingHuman = new LCHumanMessage({ id: "h-1", content: "hello" });
+    const existingAi = new AIMessage({
+      id: "ai-1",
+      content: "",
+      tool_calls: [
+        {
+          id: "tc-1",
+          name: "confirm_action",
+          args: "{\"action\":\"deploy\"}",
+          type: "tool_call",
+        },
+      ],
+    });
+    const orphanTool = new LCToolMessage({
+      id: "tool-orphan",
+      content: "Tool call 'confirm_action' with id 'tc-1' was interrupted before completion.",
+      tool_call_id: "tc-1",
+    });
+    const incomingTool = new LCToolMessage({
+      id: "tool-real",
+      content: "approved",
+      tool_call_id: "tc-1",
+    });
+    const input = makeInput({
+      tools: [
+        {
+          name: "confirm_action",
+          description: "fresh frontend tool",
+          parameters: { type: "object", properties: {} },
+        },
+        {
+          name: "collect_user_input",
+          description: "second frontend tool",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+      context: [
+        {
+          description:
+            "A2UI Component Schema — available components for generating UI surfaces.\nUse these component names and props when creating A2UI operations.",
+          value: { components: ["Panel"] },
+        },
+        { description: "regular", value: { locale: "en" } },
+      ],
+    } as any);
+
+    const result = merge(
+      {
+        messages: [existingHuman, existingAi, orphanTool],
+        tools: [{ name: "confirm_action", description: "stale" }],
+        copilotkit: { preserved: true },
+      },
+      [incomingTool],
+      input,
+    );
+
+    expect(orphanTool.content).toBe("approved");
+    expect(result.messages).toEqual([]);
+    expect((existingAi.tool_calls?.[0] as any).args).toEqual({
+      action: "deploy",
+    });
+    expect(result.tools.map((tool: any) => tool.name)).toEqual([
+      "confirm_action",
+      "collect_user_input",
+    ]);
+    expect(result["ag-ui"]).toMatchObject({
+      tools: result.tools,
+      context: [{ description: "regular", value: { locale: "en" } }],
+      a2ui_schema: { components: ["Panel"] },
+    });
+    expect(result.copilotkit).toMatchObject({
+      preserved: true,
+      actions: result.tools,
+    });
   });
 });
 

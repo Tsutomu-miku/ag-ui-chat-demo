@@ -28,7 +28,7 @@ import {
   flattenUserContent,
   normalizeToolContent,
   camelToSnake,
-} from "../src/convert.js";
+} from "../src/utils/convert.js";
 
 // ============================================================
 // contentToString

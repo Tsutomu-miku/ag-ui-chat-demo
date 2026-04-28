@@ -76,10 +76,11 @@ export interface EndpointOptions {
  * @example
  * ```ts
  * import { createAgentEndpoint } from "ag-ui-hono";
- * import { createAgentLoop } from "ag-ui-langchain";
+ * import { LangGraphAgent } from "ag-ui-langgraph";
  *
+ * const agent = new LangGraphAgent({ name: "agent", graph });
  * const agentApp = createAgentEndpoint(
- *   (input, signal) => createAgentLoop(input, { model, tools }, signal),
+ *   (input, signal) => agent.clone().run(input),
  *   { onComplete: (threadId, msgs, events) => persist(threadId, msgs, events) }
  * );
  *

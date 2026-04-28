@@ -41,7 +41,7 @@ export type SchemaKeys = {
 
 // ── Default schema keys (protocol-internal) ──
 
-export const DEFAULT_SCHEMA_KEYS = ["messages", "tools"];
+export const DEFAULT_SCHEMA_KEYS = ["messages", "tools", "ag-ui", "copilotkit"];
 
 // ── Reasoning / thinking process ──
 

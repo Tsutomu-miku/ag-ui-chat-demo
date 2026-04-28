@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { makeJsonSafe, jsonSafeStringify } from "../src/convert.js";
+import { makeJsonSafe, jsonSafeStringify } from "../src/utils/convert.js";
 
 describe("makeJsonSafe", () => {
   // ── Primitives ──

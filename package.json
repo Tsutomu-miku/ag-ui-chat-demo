@@ -9,7 +9,7 @@
     "lint": "pnpm --filter ag-ui-chat-server run lint",
     "build": "pnpm --filter ag-ui-chat-client run build",
     "test": "pnpm -r run test",
-    "test:packages": "pnpm --filter ag-ui-langchain --filter ag-ui-hono run test",
+    "test:packages": "pnpm --filter ag-ui-langgraph --filter ag-ui-hono run test",
     "typecheck": "pnpm -r run typecheck"
   },
   "devDependencies": {

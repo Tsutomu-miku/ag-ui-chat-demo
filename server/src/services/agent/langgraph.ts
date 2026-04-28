@@ -1,5 +1,5 @@
 /**
- * LangGraph Agent — Demo configuration using ag-ui-langchain.
+ * LangGraph Agent — Demo configuration using ag-ui-langgraph.
  *
  * This file shows how simple it is to set up an agent using the
  * `LangGraphAgent` class, which wraps a compiled LangGraph graph
@@ -9,7 +9,7 @@
 
 import type { BaseEvent } from "@ag-ui/core";
 import type { RunAgentInput } from "@ag-ui/core";
-import { LangGraphAgent } from "ag-ui-langchain";
+import { LangGraphAgent } from "ag-ui-langgraph";
 import { createReactAgent as lgCreateReactAgent } from "@langchain/langgraph/prebuilt";
 
 import { backendTools } from "./tools.js";

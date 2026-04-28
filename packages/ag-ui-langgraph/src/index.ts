@@ -1,5 +1,5 @@
 /**
- * ag-ui-langchain — AG-UI protocol adapter for LangGraph.
+ * ag-ui-langgraph — AG-UI protocol adapter for LangGraph.
  *
  * TypeScript implementation fully aligned with Python ag_ui_langgraph (v0.0.34).
  *
@@ -15,7 +15,7 @@
  * ## Quick Start
  *
  * ```ts
- * import { LangGraphAgent, createReactAgent } from "ag-ui-langchain";
+ * import { LangGraphAgent, createReactAgent } from "ag-ui-langgraph";
  * import { createAgentEndpoint } from "ag-ui-hono";
  *
  * // Option 1: Direct graph wrapping (most aligned with Python)
@@ -36,16 +36,22 @@
 // ── Agent class and factories (primary API, aligned with Python) ──
 export {
   LangGraphAgent,
+} from "./agent.js";
+
+export {
   createReactAgent,
   createSupervisor,
-} from "./agent.js";
+} from "./factory.js";
 
 export type {
   LangGraphAgentConfig,
+} from "./agent.js";
+
+export type {
   ReactAgentConfig,
   SubAgentDefinition,
   SupervisorConfig,
-} from "./agent.js";
+} from "./factory.js";
 
 // ── Types (aligned with Python types.py) ──
 export type {
@@ -97,6 +103,6 @@ export {
   camelToSnake,
   filterObjectBySchemaKeys,
   getStreamPayloadInput,
-} from "./convert.js";
+} from "./utils/convert.js";
 
-export type { AGUIContentItem } from "./convert.js";
+export type { AGUIContentItem } from "./utils/convert.js";

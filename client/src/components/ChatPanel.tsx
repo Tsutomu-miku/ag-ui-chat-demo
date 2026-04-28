@@ -11,6 +11,8 @@ import { FrontendToolUI } from "./FrontendToolUI";
 import { ExecutionTree } from "./ExecutionTree";
 import { FRONTEND_TOOLS } from "../tools/frontendTools";
 
+type DemoMode = "agent" | "protocol";
+
 function buildMessageView(messages: ChatMessage[]) {
   return {
     hasMessages: messages.length > 0,
@@ -70,6 +72,7 @@ export function ChatPanel({
   onToggleSidebar,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
+  const [demoMode, setDemoMode] = useState<DemoMode>("agent");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -80,6 +83,7 @@ export function ChatPanel({
     isStreaming,
     pendingToolCalls,
   } = useAgentChat({
+    agentUrl: demoMode === "protocol" ? "/api/protocol-demo" : "/api/agent",
     frontendTools: FRONTEND_TOOLS,
     onThreadEvent: threadActions.handleThreadEvent,
   });
@@ -127,8 +131,15 @@ export function ChatPanel({
       async () => {
         await threadActions.refreshList();
       },
+      demoMode === "protocol"
+        ? {
+            forwardedProps: {
+              streamSubgraphs: true,
+            },
+          }
+        : undefined,
     );
-  }, [input, isStreaming, thread, threadActions, sendMessage]);
+  }, [demoMode, input, isStreaming, thread, threadActions, sendMessage]);
 
   const handleToolResult = useCallback(
     async (toolCallId: string, result: string) => {
@@ -148,6 +159,11 @@ export function ChatPanel({
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const selectPrompt = (mode: DemoMode, prompt: string) => {
+    setDemoMode(mode);
+    setInput(prompt);
   };
 
   const messages = thread?.messages ?? [];
@@ -180,23 +196,59 @@ export function ChatPanel({
           </button>
         )}
         <h3>{thread?.title || "AG-UI Chat Demo"}</h3>
-        <div className="header-badge">AG-UI Protocol</div>
+        <div className="mode-switch" aria-label="Demo mode">
+          <button
+            className={demoMode === "agent" ? "active" : ""}
+            onClick={() => setDemoMode("agent")}
+            type="button"
+          >
+            Agent
+          </button>
+          <button
+            className={demoMode === "protocol" ? "active" : ""}
+            onClick={() => setDemoMode("protocol")}
+            type="button"
+          >
+            Protocol Lab
+          </button>
+        </div>
       </div>
 
       {/* Messages */}
       <div className="messages-container">
         {!hasMessages && !isStreaming && (
           <div className="welcome-screen">
-            <div className="welcome-icon">🤖</div>
-            <h2>AG-UI Chat Demo</h2>
+            <div className="welcome-icon">AG</div>
+            <h2>AG-UI LangGraph Demo</h2>
             <p>
-              Best-practice demonstration of the AG-UI protocol with multi-agent
-              orchestration
+              Run a live agent or switch to a deterministic protocol lab that
+              exercises the adapter without an LLM key.
             </p>
+            <div className="protocol-strip">
+              <span>text stream</span>
+              <span>tool calls</span>
+              <span>state snapshot</span>
+              <span>frontend resume</span>
+            </div>
             <div className="feature-grid">
               <div
                 className="feature-card"
-                onClick={() => setInput("What's the weather like in Tokyo?")}
+                onClick={() =>
+                  selectPrompt("protocol", "Run the AG-UI protocol lab")
+                }
+              >
+                <span className="feature-emoji">⌁</span>
+                <span>
+                  Protocol Lab
+                  <br />
+                  <small>No LLM key required</small>
+                </span>
+              </div>
+              <div
+                className="feature-card"
+                onClick={() =>
+                  selectPrompt("agent", "What's the weather like in Tokyo?")
+                }
               >
                 <span className="feature-emoji">🌤</span>
                 <span>
@@ -208,7 +260,8 @@ export function ChatPanel({
               <div
                 className="feature-card"
                 onClick={() =>
-                  setInput(
+                  selectPrompt(
+                    "agent",
                     "Research the latest AI agent frameworks and write a summary report",
                   )
                 }
@@ -223,7 +276,8 @@ export function ChatPanel({
               <div
                 className="feature-card"
                 onClick={() =>
-                  setInput(
+                  selectPrompt(
+                    "agent",
                     "Calculate (23 * 45) + (67 / 3) and explain the result",
                   )
                 }
@@ -238,7 +292,8 @@ export function ChatPanel({
               <div
                 className="feature-card"
                 onClick={() =>
-                  setInput(
+                  selectPrompt(
+                    "agent",
                     "I need to deploy the production server, please confirm this action",
                   )
                 }
@@ -252,10 +307,9 @@ export function ChatPanel({
               </div>
             </div>
             <p className="welcome-sub">
-              A <strong>Supervisor</strong> agent coordinates{" "}
-              <strong>Researcher</strong> and <strong>Writer</strong>{" "}
-              sub-agents. <strong>Frontend tools</strong> require your
-              confirmation.
+              <strong>Agent</strong> uses the configured LLM.{" "}
+              <strong>Protocol Lab</strong> emits deterministic LangGraph-style
+              events through the same adapter.
             </p>
           </div>
         )}
@@ -361,8 +415,10 @@ export function ChatPanel({
           )}
         </div>
         <p className="input-hint">
-          Enter to send · Shift+Enter for new line · Supervisor coordinates
-          Researcher &amp; Writer agents
+          Enter to send · Shift+Enter for new line ·{" "}
+          {demoMode === "protocol"
+            ? "Protocol Lab streams deterministic AG-UI events"
+            : "Agent mode uses the configured LangGraph assistant"}
         </p>
       </div>
     </main>

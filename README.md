@@ -1,9 +1,11 @@
 # AG-UI Chat Demo
 
 A best-practice demonstration of the [AG-UI Protocol](https://docs.ag-ui.com) with LangGraph.
-This project shows how to properly build an AI chat application using `@ag-ui/encoder`,
-`@langchain/langgraph`, backend tools, frontend tools (human-in-the-loop), and backend-managed
-history persistence.
+This project shows how to build an AI chat application using `@ag-ui/encoder`,
+the local `ag-ui-langgraph` adapter, `@langchain/langgraph`, backend tools,
+frontend tools (human-in-the-loop), and backend-managed history persistence.
+It also includes a deterministic Protocol Lab demo at `/api/protocol-demo` for
+exercising AG-UI events without an LLM key.
 
 ## Architecture
 
@@ -19,7 +21,7 @@ history persistence.
 │                    useAgentChat            resolveToolCall           │
 │                         │                       │                    │
 │                         ▼                       ▼                    │
-│              POST /api/agent            POST /api/agent              │
+│              POST /api/agent            POST /api/protocol-demo      │
 │              {new messages, tools}      {toolResult, tools}          │
 └─────────────────────┬───────────────────────────┬───────────────────┘
                       │         AG-UI SSE          │
@@ -28,11 +30,11 @@ history persistence.
 │                         BACKEND (Hono + LangGraph)                  │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  POST /api/agent                                            │    │
+│  │  POST /api/agent and /api/protocol-demo                     │    │
 │  │                                                             │    │
 │  │  1. Accept RunAgentInput (new messages, tools, threadId)    │    │
 │  │  2. Hydrate prior thread messages from backend history      │    │
-│  │  3. Local LangGraph agent runs model/tool/model loop        │    │
+│  │  3. ag-ui-langgraph translates LangGraph streamEvents       │    │
 │  │  4. @ag-ui/encoder encodes events as SSE                    │    │
 │  │  5. persistHistory() saves to in-memory KV store            │    │
 │  └─────────────────────────────────────────────────────────────┘    │
@@ -48,6 +50,16 @@ history persistence.
 ```
 
 ## AG-UI Protocol Best Practices
+
+### Protocol Lab
+
+The UI mode switch has two paths:
+
+- `Agent`: uses the configured LLM-backed LangGraph assistant at `/api/agent`.
+- `Protocol Lab`: uses `/api/protocol-demo`, a deterministic LangGraph-style
+  graph wrapped by `LangGraphAgent`, to show text streaming, backend tool
+  results, state snapshots, and frontend tool pause/resume without requiring an
+  API key.
 
 ### 1. Using `@ag-ui/encoder` for SSE Encoding
 
@@ -283,35 +295,41 @@ ag-ui-chat-demo/
 │       ├── http/
 │       │   └── routes/
 │       │       ├── agent.ts  # AG-UI SSE endpoint
+│       │       ├── protocol-demo.ts # Deterministic protocol showcase endpoint
 │       │       ├── health.ts # Health check route
 │       │       └── history.ts # History HTTP routes
 │       └── services/
 │           ├── agent/
 │           │   ├── model.ts  # Chat model factory
+│           │   ├── protocol-demo.ts # Deterministic streamEvents demo graph
 │           │   └── tools.ts  # Backend tools
 │           └── history/
 │               ├── persistence.ts # AG-UI event -> stored message mapping
 │               └── store.ts       # In-memory thread store
-└── client/
-    ├── package.json          # Client dependencies (React, @ag-ui/client, @ag-ui/core)
-    ├── tsconfig.json
-    ├── vite.config.ts        # Vite config with /api proxy
-    ├── index.html
-    └── src/
-        ├── main.tsx          # Entry point
-        ├── App.tsx           # Root component
-        ├── types.ts          # Shared TypeScript types
-        ├── hooks/
-        │   ├── useThreads.ts    # Thread list management (read/delete from backend)
-        │   └── useAgentChat.ts  # AG-UI SSE streaming, frontend tools, multi-turn
-        ├── components/
-        │   ├── Sidebar.tsx       # Thread list sidebar
-        │   ├── ChatPanel.tsx     # Main chat interface
-        │   ├── MessageBubble.tsx # Message rendering with Markdown
-        │   ├── ToolCallDisplay.tsx # Tool call visualization (backend/frontend badges)
-        │   └── FrontendToolUI.tsx  # Human-in-the-loop UI (confirm, input)
-        └── styles/
-            └── global.css       # Complete dark theme CSS
+├── client/
+│   ├── package.json          # Client dependencies (React, @ag-ui/client, @ag-ui/core)
+│   ├── tsconfig.json
+│   ├── vite.config.ts        # Vite config with /api proxy
+│   ├── index.html
+│   └── src/
+│       ├── main.tsx          # Entry point
+│       ├── App.tsx           # Root component
+│       ├── types.ts          # Shared TypeScript types
+│       ├── hooks/
+│       │   ├── useThreads.ts    # Thread list management (read/delete from backend)
+│       │   └── useAgentChat.ts  # AG-UI SSE streaming, frontend tools, multi-turn
+│       ├── components/
+│       │   ├── Sidebar.tsx       # Thread list sidebar
+│       │   ├── ChatPanel.tsx     # Main chat interface
+│       │   ├── MessageBubble.tsx # Message rendering with Markdown
+│       │   ├── ToolCallDisplay.tsx # Tool call visualization (backend/frontend badges)
+│       │   └── FrontendToolUI.tsx  # Human-in-the-loop UI (confirm, input)
+│       └── styles/
+│           └── global.css       # Complete dark theme CSS
+└── packages/
+    ├── ag-ui-langgraph/          # LangGraph -> AG-UI adapter
+    ├── ag-ui-hono/               # Hono SSE endpoint adapter
+    └── ag-ui-react/              # React hooks and thread state helpers
 ```
 
 ## Technology Stack
