@@ -58,6 +58,9 @@ describe("types", () => {
       type: "function",
       function: { name: "search", arguments: '{"q":"test"}' },
       complete: true,
+      stepId: "step-1",
+      parentStepId: "step-root",
+      stepKind: "subagent",
       stepName: "researcher",
       parentStepName: "supervisor",
     };
@@ -125,10 +128,15 @@ describe("types", () => {
 
   it("ActiveStep has required and optional fields", () => {
     const root: ActiveStep = {
+      stepId: "step-root",
+      stepKind: "supervisor",
       stepName: "supervisor",
       startedAt: "2024-01-01T00:00:00.000Z",
     };
     const child: ActiveStep = {
+      stepId: "step-child",
+      parentStepId: "step-root",
+      stepKind: "subagent",
       stepName: "researcher",
       parentStepName: "supervisor",
       startedAt: "2024-01-01T00:00:00.000Z",
@@ -149,7 +157,7 @@ describe("types", () => {
           createdAt: "2024-01-01T00:00:00.000Z",
         },
       },
-      { type: "assistant_start", messageId: "a1" },
+      { type: "assistant_start", messageId: "a1", stepId: "step-1" },
       { type: "assistant_delta", messageId: "a1", delta: "text" },
       { type: "assistant_end", messageId: "a1" },
       {
@@ -157,15 +165,33 @@ describe("types", () => {
         parentMessageId: "a1",
         toolCallId: "tc1",
         toolCallName: "search",
+        stepId: "step-1",
       },
       { type: "tool_args", toolCallId: "tc1", delta: '{}' },
       { type: "tool_end", toolCallId: "tc1" },
-      { type: "step_started", stepName: "researcher" },
-      { type: "step_finished", stepName: "researcher" },
+      {
+        type: "tool_result_start",
+        messageId: "tool-message-1",
+        toolCallId: "tc1",
+      },
+      {
+        type: "tool_result_delta",
+        messageId: "tool-message-1",
+        toolCallId: "tc1",
+        delta: '{"ok":',
+      },
+      {
+        type: "tool_result_end",
+        messageId: "tool-message-1",
+        toolCallId: "tc1",
+      },
+      { type: "step_started", stepId: "step-1", stepName: "researcher" },
+      { type: "step_finished", stepId: "step-1", stepName: "researcher" },
       { type: "run_complete" },
+      { type: "trace_event", name: "ag-ui.trace", value: { type: "span.start" } },
     ];
 
-    // All 10 event types should be representable
-    expect(events).toHaveLength(10);
+    // All event types should be representable
+    expect(events).toHaveLength(14);
   });
 });

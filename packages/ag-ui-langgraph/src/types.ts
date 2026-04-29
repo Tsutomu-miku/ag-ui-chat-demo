@@ -1,3 +1,6 @@
+import type { BaseEvent } from "@ag-ui/core";
+import type { CompiledStateGraph } from "@langchain/langgraph";
+
 /**
  * AG-UI LangGraph Types
  *
@@ -28,9 +31,22 @@ export enum CustomEventNames {
   Exit = "exit",
 }
 
-// ── State types ──
+// ── JSON / state types ──
+
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue =
+  | JsonPrimitive
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+export type JsonObject = { [key: string]: JsonValue };
 
 export type State = Record<string, unknown>;
+
+export type RunnableConfigLike = Record<string, unknown> & {
+  configurable?: Record<string, unknown>;
+};
+
+export type LocalCompiledGraph = CompiledStateGraph<State, Partial<State>, string>;
 
 export type SchemaKeys = {
   input?: string[] | null;
@@ -63,6 +79,7 @@ export type LangGraphReasoning = {
 
 export type MessageInProgress = {
   id: string;
+  text_started?: boolean;
   tool_call_id?: string | null;
   tool_call_name?: string | null;
   tool_call_info_by_index?: Record<
@@ -96,6 +113,7 @@ export type RunMetadata = {
   prev_node_name?: string | null;
   schema_keys?: SchemaKeys | null;
   has_function_streaming?: boolean;
+  streamed_tool_call_ids?: Set<string>;
   model_made_tool_call?: boolean;
   state_reliable?: boolean;
   manually_emitted_state?: State | null;
@@ -106,17 +124,17 @@ export type RunMetadata = {
 // ── Prepared stream (from prepare_stream) ──
 
 export type PreparedStream = {
-  stream: AsyncIterable<any> | null;
+  stream: AsyncIterable<LangGraphStreamEvent> | null;
   state: State | null;
-  config: Record<string, any> | null;
-  events_to_dispatch?: any[];
+  config: RunnableConfigLike | null;
+  events_to_dispatch?: BaseEvent[];
 };
 
 // ── Forwarded props (from RunAgentInput) ──
 
 export type ForwardedProps = {
   node_name?: string | null;
-  command?: { resume?: any } | null;
+  command?: { resume?: unknown } | null;
   stream_subgraphs?: boolean;
   frontendToolResume?: { toolCallId?: string } | null;
   frontend_tool_resume?: { tool_call_id?: string; toolCallId?: string } | null;
@@ -169,7 +187,17 @@ export type PredictStateTool = {
 export type StreamEventMetadata = Partial<{
   stepName: string;
   parentStepName: string;
+  stepId: string;
+  parentStepId: string;
+  stepKind: TraceStepKind;
 }>;
+
+export type TraceStepKind =
+  | "supervisor"
+  | "subagent"
+  | "node"
+  | "tool"
+  | "frontend_tool";
 
 // ── LangChain tool call extraction type ──
 
@@ -177,4 +205,49 @@ export type LangChainToolCall = {
   id?: string;
   name: string;
   args?: Record<string, unknown>;
+};
+
+// ── LangGraph runtime shapes ──
+
+export type LangGraphStreamEvent = {
+  event: string;
+  name?: string;
+  data?: unknown;
+  metadata?: Record<string, unknown>;
+  run_id?: unknown;
+};
+
+export type ToolCallChunk = {
+  id?: string;
+  name?: string;
+  args?: unknown;
+  index?: number;
+};
+
+export type InterruptLike = {
+  value?: unknown;
+};
+
+export type CheckpointTaskLike = {
+  interrupts?: Iterable<InterruptLike> | InterruptLike[] | null;
+};
+
+export type CheckpointSnapshotLike = {
+  values?: State | null;
+  tasks?: Iterable<CheckpointTaskLike | unknown> | Array<CheckpointTaskLike | unknown> | null;
+  next?: string[] | readonly string[] | null;
+  metadata?: Record<string, unknown> | null;
+  config?: RunnableConfigLike;
+};
+
+export type GraphWithCheckpointing = {
+  getState?: (config: RunnableConfigLike) => Promise<CheckpointSnapshotLike> | CheckpointSnapshotLike;
+  updateState?: (
+    config: RunnableConfigLike,
+    state: State,
+    asNode?: string,
+  ) => Promise<RunnableConfigLike | unknown> | RunnableConfigLike | unknown;
+  getStateHistory?: (
+    config: RunnableConfigLike,
+  ) => AsyncIterable<CheckpointSnapshotLike | unknown> | Iterable<CheckpointSnapshotLike | unknown>;
 };

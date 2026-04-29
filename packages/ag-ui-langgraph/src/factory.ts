@@ -1,7 +1,11 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createReactAgent as createLangGraphReactAgent } from "@langchain/langgraph/prebuilt";
+import { createSupervisor as createLangGraphSupervisor } from "@langchain/langgraph-supervisor";
 
 import { LangGraphAgent } from "./agent.js";
+import type { LocalCompiledGraph } from "./types.js";
+import type { LangGraphPlugin } from "./plugins/trace.js";
 
 /** Configuration for createReactAgent factory (convenience). */
 export interface ReactAgentConfig {
@@ -10,9 +14,11 @@ export interface ReactAgentConfig {
   /** The LangChain chat model */
   model: BaseChatModel;
   /** Backend tools (server-side execution) */
-  tools?: any[];
+  tools?: StructuredToolInterface[];
   /** System prompt */
   systemPrompt?: string;
+  /** Optional protocol plugins */
+  plugins?: LangGraphPlugin[];
 }
 
 /** Sub-agent definition for supervisor-shaped factory configs. */
@@ -20,10 +26,12 @@ export interface SubAgentDefinition {
   /** System prompt for the sub-agent */
   systemPrompt: string;
   /** Tools available to the sub-agent */
-  tools: any[];
+  tools: StructuredToolInterface[];
   /** Optional: override model for this sub-agent */
   model?: BaseChatModel;
 }
+
+export type SupervisorOutputMode = "full_history" | "last_message";
 
 /** Configuration for createSupervisor compatibility helper. */
 export interface SupervisorConfig {
@@ -32,11 +40,15 @@ export interface SupervisorConfig {
   /** The LangChain chat model */
   model: BaseChatModel;
   /** Backend tools the supervisor can call directly */
-  tools?: any[];
+  tools?: StructuredToolInterface[];
   /** System prompt */
   systemPrompt?: string;
   /** Sub-agent definitions keyed by name */
   subAgents: Record<string, SubAgentDefinition>;
+  /** How much sub-agent history to preserve in the supervisor conversation */
+  outputMode?: SupervisorOutputMode;
+  /** Optional protocol plugins */
+  plugins?: LangGraphPlugin[];
 }
 
 /**
@@ -46,30 +58,45 @@ export function createReactAgent(config: ReactAgentConfig): LangGraphAgent {
   const graph = createLangGraphReactAgent({
     llm: config.model,
     tools: config.tools ?? [],
+    ...(config.name ? { name: config.name } : {}),
     ...(config.systemPrompt ? { prompt: config.systemPrompt } : {}),
-  });
+  }) as LocalCompiledGraph;
 
   return new LangGraphAgent({
     name: config.name ?? "agent",
     graph,
+    plugins: config.plugins,
   });
 }
 
 /**
- * Compatibility helper for supervisor-shaped configs.
- *
- * This does not construct a true multi-agent supervisor topology. Build that
- * graph explicitly and pass it to `new LangGraphAgent({ graph })` when needed.
+ * Build a real LangGraph supervisor topology and wrap it in the AG-UI adapter.
  */
 export function createSupervisor(config: SupervisorConfig): LangGraphAgent {
-  const graph = createLangGraphReactAgent({
+  const supervisorName = config.name ?? "supervisor";
+  const agents = Object.entries(config.subAgents).map(([agentName, subAgent]) =>
+    createLangGraphReactAgent({
+      llm: subAgent.model ?? config.model,
+      tools: subAgent.tools,
+      name: agentName,
+      prompt: subAgent.systemPrompt,
+    }),
+  );
+
+  const workflow = createLangGraphSupervisor({
+    agents,
     llm: config.model,
     tools: config.tools ?? [],
+    supervisorName,
+    outputMode: config.outputMode ?? "full_history",
     ...(config.systemPrompt ? { prompt: config.systemPrompt } : {}),
   });
+  const graph = workflow.compile({ name: supervisorName }) as LocalCompiledGraph;
 
   return new LangGraphAgent({
-    name: config.name ?? "supervisor",
+    name: supervisorName,
     graph,
+    plugins: config.plugins,
+    subAgents: Object.keys(config.subAgents),
   });
 }

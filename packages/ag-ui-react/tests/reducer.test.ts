@@ -319,6 +319,74 @@ describe("updateMessagesWithAgentEvent", () => {
       expect(messages).toHaveLength(1);
     });
 
+    it("streams tool result content progressively before the final result arrives", () => {
+      const messages = applyEvents([], [
+        {
+          type: "tool_result_start",
+          messageId: "tm-stream-1",
+          toolCallId: "tc1",
+        },
+        {
+          type: "tool_result_delta",
+          messageId: "tm-stream-1",
+          toolCallId: "tc1",
+          delta: '{"res',
+        },
+        {
+          type: "tool_result_delta",
+          messageId: "tm-stream-1",
+          toolCallId: "tc1",
+          delta: 'ult":4}',
+        },
+      ]);
+
+      expect(messages).toEqual([
+        expect.objectContaining({
+          id: "tm-stream-1",
+          role: "tool",
+          toolCallId: "tc1",
+          content: '{"result":4}',
+          isStreaming: true,
+        }),
+      ]);
+    });
+
+    it("merges the final tool result into an existing streamed tool message", () => {
+      const messages = applyEvents([], [
+        {
+          type: "tool_result_start",
+          messageId: "tm-stream-1",
+          toolCallId: "tc1",
+        },
+        {
+          type: "tool_result_delta",
+          messageId: "tm-stream-1",
+          toolCallId: "tc1",
+          delta: '{"res',
+        },
+        {
+          type: "append_message",
+          message: {
+            id: "tm-stream-1",
+            role: "tool",
+            content: '{"result":4}',
+            toolCallId: "tc1",
+            createdAt: "2024-01-01T00:00:01.000Z",
+          },
+        },
+      ]);
+
+      expect(messages).toEqual([
+        expect.objectContaining({
+          id: "tm-stream-1",
+          role: "tool",
+          toolCallId: "tc1",
+          content: '{"result":4}',
+          isStreaming: false,
+        }),
+      ]);
+    });
+
     it("appends non-tool messages unchanged", () => {
       const messages = applyEvents([], [{
         type: "append_message",

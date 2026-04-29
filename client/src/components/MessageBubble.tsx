@@ -1,19 +1,28 @@
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "ag-ui-react";
+
+import { TraceMarkdown } from "./trace/TraceMarkdown";
 
 interface Props {
   message: ChatMessage;
   isStreaming?: boolean;
+  sourceLabel?: string;
 }
 
-export function MessageBubble({ message, isStreaming }: Props) {
+export function MessageBubble({ message, isStreaming, sourceLabel }: Props) {
   return (
     <div className={`message ${message.role}`}>
       <div className="message-avatar">{message.role === "user" ? "👤" : "🤖"}</div>
       <div className="message-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-        {isStreaming && <span className="cursor-blink">▊</span>}
+        {sourceLabel && (
+          <div className="message-source">
+            <span className="message-source-badge">{sourceLabel}</span>
+          </div>
+        )}
+        <TraceMarkdown
+          content={message.content}
+          isStreaming={isStreaming}
+          className="message-markdown"
+        />
       </div>
     </div>
   );

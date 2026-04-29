@@ -19,6 +19,9 @@ export interface ToolCallFunction {
   /** Whether the tool call has completed (received result) */
   complete?: boolean;
   /** AG-UI step metadata for tree rendering */
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
   stepName?: string;
   parentStepName?: string;
 }
@@ -40,10 +43,71 @@ export interface ChatMessage {
   /** Whether the reasoning stream is still in progress */
   isReasoningStreaming?: boolean;
   /** AG-UI step metadata for tree rendering */
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
   stepName?: string;
   parentStepName?: string;
   createdAt: string;
 }
+
+export interface TraceEvent {
+  type: string;
+  sequence?: number;
+  createdAt?: string;
+  runId?: string;
+  name?: string;
+  value?: unknown;
+  messageId?: string;
+  parentMessageId?: string;
+  role?: string;
+  delta?: string;
+  content?: string;
+  toolCallId?: string;
+  toolCallName?: string;
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
+  stepName?: string;
+  parentStepName?: string;
+}
+
+export const AG_UI_TRACE_EVENT_NAME = "ag-ui.trace";
+export const AG_UI_TRACE_PROTOCOL_VERSION = 1;
+
+export type AgUiTraceEvent =
+  | {
+      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
+      type: "span.start";
+      spanId: string;
+      name: string;
+      kind: string;
+      parentSpanId?: string;
+      source?: Record<string, unknown>;
+    }
+  | {
+      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
+      type: "span.end";
+      spanId: string;
+      source?: Record<string, unknown>;
+    }
+  | {
+      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
+      type: "message.link";
+      messageId: string;
+      spanId: string;
+      role?: string;
+      source?: Record<string, unknown>;
+    }
+  | {
+      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
+      type: "tool.link";
+      toolCallId: string;
+      spanId: string;
+      toolCallName?: string;
+      parentMessageId?: string;
+      source?: Record<string, unknown>;
+    };
 
 // ── Thread (conversation) ──
 
@@ -51,6 +115,7 @@ export interface ChatThread {
   id: string;
   title: string;
   messages: ChatMessage[];
+  traceEvents?: TraceEvent[];
   createdAt: string;
   updatedAt: string;
 }
@@ -77,6 +142,9 @@ export interface PendingToolCall {
   toolCallName: string;
   args: Record<string, unknown>;
   status: "pending" | "approved" | "rejected";
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
   stepName?: string;
   parentStepName?: string;
   result?: string;
@@ -85,6 +153,9 @@ export interface PendingToolCall {
 // ── Active step tracking for sub-agent execution ──
 
 export interface ActiveStep {
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
   stepName: string;
   parentStepName?: string;
   startedAt: string;
@@ -103,6 +174,9 @@ export type ThreadAgentEvent =
   | {
       type: "assistant_start";
       messageId: string;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
       stepName?: string;
       parentStepName?: string;
     }
@@ -120,6 +194,9 @@ export type ThreadAgentEvent =
       parentMessageId: string;
       toolCallId: string;
       toolCallName: string;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
       stepName?: string;
       parentStepName?: string;
     }
@@ -133,13 +210,40 @@ export type ThreadAgentEvent =
       toolCallId: string;
     }
   | {
+      type: "tool_result_start";
+      messageId: string;
+      toolCallId: string;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
+      stepName?: string;
+      parentStepName?: string;
+    }
+  | {
+      type: "tool_result_delta";
+      messageId: string;
+      toolCallId: string;
+      delta: string;
+    }
+  | {
+      type: "tool_result_end";
+      messageId: string;
+      toolCallId: string;
+    }
+  | {
       type: "step_started";
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
       stepName: string;
       parentStepName?: string;
     }
   | {
       type: "reasoning_start";
       messageId: string;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
       stepName?: string;
       parentStepName?: string;
     }
@@ -154,9 +258,17 @@ export type ThreadAgentEvent =
     }
   | {
       type: "step_finished";
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
       stepName: string;
       parentStepName?: string;
     }
   | {
       type: "run_complete";
+    }
+  | {
+      type: "trace_event";
+      name: string;
+      value: unknown;
     };

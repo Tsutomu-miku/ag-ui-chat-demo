@@ -37,22 +37,15 @@ import {
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
-import { Command, type CompiledStateGraph } from "@langchain/langgraph";
+import { Command } from "@langchain/langgraph";
 import { v4 as uuid } from "uuid";
 
 import {
-  contentToString,
   toLangChainMessages,
   langchainMessagesToAgui,
-  resolveReasoningContent,
-  resolveEncryptedReasoningContent,
-  resolveMessageContent,
   filterObjectBySchemaKeys,
   getStreamPayloadInput,
   aguiMessagesToLangchain,
-  camelToSnake,
-  normalizeToolContent,
-  jsonSafeStringify,
 } from "./utils/convert.js";
 import {
   DEFAULT_SCHEMA_KEYS,
@@ -60,21 +53,22 @@ import {
   CustomEventNames,
 } from "./types.js";
 import type {
-  StreamEventMetadata,
   RunMetadata,
   MessageInProgress,
   MessagesInProgressRecord,
   LangGraphReasoning,
-  ThinkingProcess,
   State,
   SchemaKeys,
   PreparedStream,
-  ForwardedProps,
+  LocalCompiledGraph,
+  RunnableConfigLike,
+  LangGraphStreamEvent,
+  CheckpointSnapshotLike,
+  InterruptLike,
+  TraceStepKind,
 } from "./types.js";
 import {
   ROOT_SUBGRAPH_NAME,
-  chunkGet,
-  collectInterrupts,
   dumpJsonSafe,
   getStreamArgs,
   parseResumeInput,
@@ -85,6 +79,39 @@ import {
   filterOrphanToolMessages,
   mergeLangGraphState,
 } from "./utils/state.js";
+import {
+  asLangGraphStreamEvent,
+  getSubgraphInfo,
+  isRecord,
+} from "./events/guards.js";
+import {
+  markPredictStateToolIfNeeded,
+  translateSingleEvent,
+} from "./events/translator.js";
+import {
+  collectInterrupts,
+  detectSubgraphNames,
+  getCheckpointBeforeMessage as findCheckpointBeforeMessage,
+  getGraphState,
+  snapshotMessages,
+  snapshotValues,
+  streamGraphEvents,
+  updateGraphState,
+} from "./runtime/graph.js";
+import {
+  buildRunConfig,
+  normalizeRunInput,
+  type NormalizedRunAgentInput,
+} from "./runtime/input.js";
+import type {
+  LangGraphPlugin,
+  LangGraphPluginContext,
+} from "./plugins/trace.js";
+import {
+  createTraceCustomEvent,
+  traceSourceFromLangGraphEvent,
+  type AgUiTraceSource,
+} from "./trace.js";
 
 // ── Configuration types ──
 
@@ -93,12 +120,23 @@ export interface LangGraphAgentConfig {
   /** Agent name (used in step events and health checks) */
   name: string;
   /** A compiled LangGraph state graph */
-  graph: CompiledStateGraph<any, any, any>;
+  graph: LocalCompiledGraph;
   /** Optional description */
   description?: string;
   /** Optional runnable config */
   config?: Record<string, unknown>;
+  /** Optional protocol plugins */
+  plugins?: LangGraphPlugin[];
+  /** Known sub-agent names for canonical AG-UI trace spans */
+  subAgents?: string[];
 }
+
+type ActiveTraceSpan = {
+  spanId: string;
+  name: string;
+  kind: TraceStepKind;
+  parentSpanId?: string;
+};
 
 // ── LangGraphAgent class (fully aligned with Python v0.0.34) ──
 
@@ -111,12 +149,22 @@ export interface LangGraphAgentConfig {
 export class LangGraphAgent {
   readonly name: string;
   readonly description?: string;
-  readonly graph: CompiledStateGraph<any, any, any>;
+  readonly graph: LocalCompiledGraph;
   protected readonly _config: Record<string, unknown>;
+  protected readonly plugins: LangGraphPlugin[];
+  protected readonly traceSubAgents: Set<string>;
 
   /** Per-request mutable state (reset on clone) */
   protected messagesInProgress: MessagesInProgressRecord = {};
   protected activeRun: RunMetadata | null = null;
+  protected activeTraceSpan: ActiveTraceSpan | null = null;
+  protected lastSupervisorSpanId: string | undefined;
+  protected traceSpanCounters = new Map<string, number>();
+  protected linkedTraceMessages = new Set<string>();
+  protected linkedTraceTools = new Set<string>();
+  protected traceSpans = new Map<string, ActiveTraceSpan>();
+  protected traceMessageOwners = new Map<string, string>();
+  protected traceToolOwners = new Map<string, string>();
 
   /** Subgraph detection */
   protected subgraphs: Set<string>;
@@ -132,22 +180,10 @@ export class LangGraphAgent {
     this.description = config.description;
     this.graph = config.graph;
     this._config = config.config ?? {};
+    this.plugins = [...(config.plugins ?? [])];
+    this.traceSubAgents = new Set(config.subAgents ?? []);
 
-    // Detect subgraph nodes (nodes whose bound runnable is a CompiledStateGraph)
-    this.subgraphs = new Set<string>();
-    try {
-      const nodes = (this.graph as any).nodes;
-      if (nodes && typeof nodes === "object") {
-        for (const [nodeName, node] of Object.entries(nodes)) {
-          const bound = (node as any)?.bound;
-          if (bound?.constructor?.name === "CompiledStateGraph") {
-            this.subgraphs.add(nodeName);
-          }
-        }
-      }
-    } catch {
-      // Subgraph detection is best-effort
-    }
+    this.subgraphs = detectSubgraphNames(this.graph);
   }
 
   /** Create a fresh copy with clean per-request state (aligned with Python `clone()`). */
@@ -160,6 +196,8 @@ export class LangGraphAgent {
         graph: this.graph,
         description: this.description,
         config: { ...this._config },
+        plugins: this.plugins.map((plugin) => plugin.clone?.() ?? plugin),
+        subAgents: [...this.traceSubAgents],
       });
     } catch (exc) {
       throw new TypeError(
@@ -171,21 +209,7 @@ export class LangGraphAgent {
 
   /** Run the agent, yielding AG-UI events (aligned with Python `run()`). */
   async *run(input: RunAgentInput): AsyncGenerator<BaseEvent> {
-    // Normalize camelCase keys from the frontend to snake_case before forwarding.
-    let forwardedProps: ForwardedProps = {};
-    if ((input as any).forwardedProps || (input as any).forwarded_props) {
-      const raw =
-        (input as any).forwardedProps ?? (input as any).forwarded_props ?? {};
-      forwardedProps = Object.fromEntries(
-        Object.entries(raw).map(([k, v]) => [camelToSnake(k), v]),
-      );
-    }
-
-    const normalizedInput = {
-      ...input,
-      forwarded_props: forwardedProps,
-    } as any;
-    yield* this._handleStreamEvents(normalizedInput);
+    yield* this._handleStreamEvents(normalizeRunInput(input));
   }
 
   // ── Event dispatch middleware (aligned with Python _dispatch_event) ──
@@ -197,7 +221,278 @@ export class LangGraphAgent {
    * @returns The event to yield, or null to suppress it.
    */
   protected _dispatchEvent(event: BaseEvent): BaseEvent | null {
-    return sanitizeRawPayloads(event);
+    let nextEvent: BaseEvent | null = event;
+    const context = this.getPluginContext();
+
+    for (const plugin of this.plugins) {
+      if (!nextEvent) break;
+      const transformed: BaseEvent | null | void = plugin.beforeDispatchEvent?.(
+        nextEvent,
+        context,
+      );
+      if (transformed === null) {
+        nextEvent = null;
+        break;
+      }
+      if (transformed) {
+        nextEvent = transformed;
+      }
+    }
+
+    return nextEvent ? sanitizeRawPayloads(nextEvent) : null;
+  }
+
+  protected getPluginContext(): LangGraphPluginContext {
+    return {
+      agentName: this.name,
+      activeRun: this.activeRun,
+      currentSubgraph: this.currentSubgraph,
+      subgraphs: this.subgraphs,
+    };
+  }
+
+  protected getTraceNamespaceRoot(
+    sourceEvent?: LangGraphStreamEvent | null,
+  ): string | undefined {
+    const checkpointNamespace =
+      typeof sourceEvent?.metadata?.langgraph_checkpoint_ns === "string"
+        ? sourceEvent.metadata.langgraph_checkpoint_ns
+        : undefined;
+    const namespaceRoot = checkpointNamespace?.split("|")[0]?.split(":")[0];
+
+    if (
+      !namespaceRoot ||
+      namespaceRoot === ROOT_SUBGRAPH_NAME ||
+      namespaceRoot === "agent" ||
+      namespaceRoot === "tools"
+    ) {
+      return undefined;
+    }
+
+    return namespaceRoot;
+  }
+
+  protected resolveTraceStepName(
+    stepName: string,
+    sourceEvent?: LangGraphStreamEvent | null,
+  ): string {
+    return (
+      this.getTraceNamespaceRoot(sourceEvent) ||
+      (this.currentSubgraph !== ROOT_SUBGRAPH_NAME
+        ? this.currentSubgraph
+        : undefined) ||
+      stepName
+    );
+  }
+
+  protected getActiveTraceStepName(): string | undefined {
+    return this.activeTraceSpan?.name;
+  }
+
+  protected classifyTraceStepKind(stepName: string): TraceStepKind {
+    if (stepName === this.name || stepName === "supervisor") {
+      return "supervisor";
+    }
+
+    if (this.traceSubAgents.has(stepName) || this.subgraphs.has(stepName)) {
+      return "subagent";
+    }
+
+    return "node";
+  }
+
+  protected nextTraceSpanId(stepName: string): string {
+    const runId = this.activeRun?.id ?? "run";
+    const key = `${runId}:${stepName}`;
+    const next = (this.traceSpanCounters.get(key) ?? 0) + 1;
+    this.traceSpanCounters.set(key, next);
+    return `${runId}:${stepName}:${next}`;
+  }
+
+  protected *emitTraceEvent(
+    event: Parameters<typeof createTraceCustomEvent>[0],
+  ): Generator<BaseEvent> {
+    const ev = this._dispatchEvent(createTraceCustomEvent(event));
+    if (ev) yield ev;
+  }
+
+  protected buildTraceSource(
+    nodeName?: string | null,
+    event?: LangGraphStreamEvent | null,
+  ): AgUiTraceSource {
+    return traceSourceFromLangGraphEvent({
+      runId: this.activeRun?.id,
+      nodeName: nodeName ?? undefined,
+      event: event ?? null,
+    });
+  }
+
+  protected *startTraceSpan(
+    stepName: string,
+    sourceEvent?: LangGraphStreamEvent | null,
+  ): Generator<BaseEvent> {
+    const traceStepName = this.resolveTraceStepName(stepName, sourceEvent);
+    const kind = this.classifyTraceStepKind(traceStepName);
+    const spanId = this.nextTraceSpanId(traceStepName);
+    const parentSpanId =
+      kind === "subagent" ? this.lastSupervisorSpanId : undefined;
+
+    this.activeTraceSpan = {
+      spanId,
+      name: traceStepName,
+      kind,
+      ...(parentSpanId ? { parentSpanId } : {}),
+    };
+    this.traceSpans.set(spanId, this.activeTraceSpan);
+
+    if (kind === "supervisor") {
+      this.lastSupervisorSpanId = spanId;
+    }
+
+    yield* this.emitTraceEvent({
+      type: "span.start",
+      spanId,
+      name: traceStepName,
+      kind,
+      ...(parentSpanId ? { parentSpanId } : {}),
+      source: this.buildTraceSource(traceStepName, sourceEvent),
+    });
+  }
+
+  protected *finishTraceSpan(
+    stepName: string,
+    sourceEvent?: LangGraphStreamEvent | null,
+  ): Generator<BaseEvent> {
+    const span = this.activeTraceSpan;
+    if (!span) return;
+    const traceStepName =
+      stepName === span.name
+        ? stepName
+        : this.resolveTraceStepName(stepName, sourceEvent);
+    if (span.name !== traceStepName) return;
+
+    yield* this.emitTraceEvent({
+      type: "span.end",
+      spanId: span.spanId,
+      source: this.buildTraceSource(traceStepName, sourceEvent),
+    });
+
+    this.activeTraceSpan = null;
+  }
+
+  protected *emitTraceLinksForEvent(
+    event: BaseEvent,
+    sourceEvent?: LangGraphStreamEvent | null,
+  ): Generator<BaseEvent> {
+    const activeSpan = this.activeTraceSpan;
+    const linkedMessages = this.linkedTraceMessages;
+    const linkedTools = this.linkedTraceTools;
+    const traceEvent = event as BaseEvent &
+      Partial<{
+        messageId: string;
+        parentMessageId: string;
+        role: string;
+        toolCallId: string;
+        toolCallName: string;
+      }>;
+
+    const resolveSpan = (spanId?: string): ActiveTraceSpan | null => {
+      if (!spanId) return activeSpan;
+      return this.traceSpans.get(spanId) ?? activeSpan ?? null;
+    };
+
+    const linkMessage = function* (
+      self: LangGraphAgent,
+      messageId: string | undefined,
+      role?: string,
+      spanId?: string,
+    ): Generator<BaseEvent> {
+      const span = resolveSpan(spanId);
+      if (!messageId || linkedMessages.has(messageId) || !span) return;
+      linkedMessages.add(messageId);
+      self.traceMessageOwners.set(messageId, span.spanId);
+      yield* self.emitTraceEvent({
+        type: "message.link",
+        messageId,
+        spanId: span.spanId,
+        ...(role ? { role } : {}),
+        source: self.buildTraceSource(span.name, sourceEvent),
+      });
+    };
+
+    const linkTool = function* (
+      self: LangGraphAgent,
+      toolCallId: string | undefined,
+      opts: {
+        toolCallName?: string;
+        parentMessageId?: string;
+        spanId?: string;
+      } = {},
+    ): Generator<BaseEvent> {
+      if (!toolCallId || linkedTools.has(toolCallId)) return;
+
+      const ownedSpanId =
+        opts.spanId ??
+        (opts.parentMessageId
+          ? self.traceMessageOwners.get(opts.parentMessageId)
+          : undefined) ??
+        self.traceToolOwners.get(toolCallId);
+      const span = resolveSpan(ownedSpanId);
+      if (!span) return;
+
+      linkedTools.add(toolCallId);
+      self.traceToolOwners.set(toolCallId, span.spanId);
+      yield* self.emitTraceEvent({
+        type: "tool.link",
+        toolCallId,
+        spanId: span.spanId,
+        ...(opts.toolCallName ? { toolCallName: opts.toolCallName } : {}),
+        ...(opts.parentMessageId
+          ? { parentMessageId: opts.parentMessageId }
+          : {}),
+        source: self.buildTraceSource(span.name, sourceEvent),
+      });
+    };
+
+    if (
+      event.type === EventType.TEXT_MESSAGE_START ||
+      event.type === EventType.REASONING_START ||
+      event.type === EventType.REASONING_MESSAGE_START
+    ) {
+      yield* linkMessage(
+        this,
+        traceEvent.messageId,
+        traceEvent.role ?? "assistant",
+        this.traceMessageOwners.get(traceEvent.messageId ?? ""),
+      );
+    }
+
+    if (event.type === EventType.TOOL_CALL_START) {
+      const ownerSpanId = traceEvent.parentMessageId
+        ? this.traceMessageOwners.get(traceEvent.parentMessageId)
+        : undefined;
+      yield* linkMessage(
+        this,
+        traceEvent.parentMessageId,
+        "assistant",
+        ownerSpanId,
+      );
+      yield* linkTool(this, traceEvent.toolCallId, {
+        toolCallName: traceEvent.toolCallName,
+        parentMessageId: traceEvent.parentMessageId,
+        spanId: ownerSpanId,
+      });
+    }
+
+    if (event.type === EventType.TOOL_CALL_RESULT) {
+      const ownerSpanId = traceEvent.toolCallId
+        ? this.traceToolOwners.get(traceEvent.toolCallId)
+        : undefined;
+      yield* linkMessage(this, traceEvent.messageId, "tool", ownerSpanId);
+      yield* linkTool(this, traceEvent.toolCallId, {
+        spanId: ownerSpanId,
+      });
+    }
   }
 
   // ── Message-in-progress tracking ──
@@ -223,7 +518,7 @@ export class LangGraphAgent {
 
   // ── Schema introspection (aligned with Python get_schema_keys) ──
 
-  protected getSchemaKeys(config: Record<string, any>): SchemaKeys {
+  protected getSchemaKeys(config: RunnableConfigLike): SchemaKeys {
     try {
       return getGraphSchemaKeys({
         graph: this.graph,
@@ -258,7 +553,10 @@ export class LangGraphAgent {
 
   // ── Step management (aligned with Python handle_node_change / start_step / end_step) ──
 
-  protected *handleNodeChange(nodeName: string | null): Generator<BaseEvent> {
+  protected *handleNodeChange(
+    nodeName: string | null,
+    sourceEvent?: LangGraphStreamEvent | null,
+  ): Generator<BaseEvent> {
     if (!this.activeRun) {
       throw new Error("handleNodeChange called outside an active run");
     }
@@ -266,6 +564,11 @@ export class LangGraphAgent {
     if (nodeName === "__end__") nodeName = null;
 
     if (nodeName !== this.activeRun.node_name) {
+      const currentTraceStepName = this.activeTraceSpan?.name;
+      const nextTraceStepName = nodeName
+        ? this.resolveTraceStepName(nodeName, sourceEvent)
+        : null;
+
       // End current step
       if (this.activeRun.node_name) {
         const ev = this._dispatchEvent({
@@ -273,6 +576,12 @@ export class LangGraphAgent {
           stepName: this.activeRun.node_name,
         } as BaseEvent);
         if (ev) yield ev;
+        if (
+          currentTraceStepName &&
+          currentTraceStepName !== nextTraceStepName
+        ) {
+          yield* this.finishTraceSpan(this.activeRun.node_name, sourceEvent);
+        }
       }
 
       // Start new step
@@ -282,6 +591,9 @@ export class LangGraphAgent {
           stepName: nodeName,
         } as BaseEvent);
         if (ev) yield ev;
+        if (nextTraceStepName && nextTraceStepName !== currentTraceStepName) {
+          yield* this.startTraceSpan(nodeName, sourceEvent);
+        }
       }
 
       this.activeRun.node_name = nodeName;
@@ -306,7 +618,7 @@ export class LangGraphAgent {
         subtype: "message",
         entityId: reasoningProcess.message_id,
         encryptedValue: encryptedData,
-      } as any);
+      } as BaseEvent);
       if (ev) yield ev;
       return;
     }
@@ -389,7 +701,7 @@ export class LangGraphAgent {
           subtype: "message",
           entityId: msgId,
           encryptedValue: reasoningProcess.signature,
-        } as any);
+        } as BaseEvent);
         if (ev) yield ev;
       }
 
@@ -412,7 +724,7 @@ export class LangGraphAgent {
   // ── State & messages snapshots (aligned with Python get_state_and_messages_snapshots) ──
 
   protected async *getStateAndMessagesSnapshots(
-    config: Record<string, any>,
+    config: RunnableConfigLike,
   ): AsyncGenerator<BaseEvent> {
     if (!this.activeRun) {
       throw new Error(
@@ -421,11 +733,9 @@ export class LangGraphAgent {
     }
 
     try {
-      const graph = this.graph as any;
-      if (typeof graph.getState !== "function") return;
-
-      const stateObj = await graph.getState(config);
-      const stateValues: State = stateObj?.values ?? {};
+      const stateObj = await getGraphState(this.graph, config);
+      if (!stateObj) return;
+      const stateValues = snapshotValues(stateObj);
 
       // STATE_SNAPSHOT
       const snapEv = this._dispatchEvent({
@@ -435,7 +745,7 @@ export class LangGraphAgent {
       if (snapEv) yield snapEv;
 
       // MESSAGES_SNAPSHOT
-      const rawMessages: any[] = (stateValues.messages as any[]) ?? [];
+      const rawMessages = snapshotMessages(stateObj);
       const filteredMessages = this._filterOrphanToolMessages(rawMessages);
       const aguiMessages = langchainMessagesToAgui(filteredMessages);
       const msgEv = this._dispatchEvent({
@@ -450,46 +760,48 @@ export class LangGraphAgent {
 
   // ── Orphan tool message filter (aligned with Python _filter_orphan_tool_messages) ──
 
-  protected _filterOrphanToolMessages(messages: any[]): any[] {
+  protected _filterOrphanToolMessages(messages: unknown[]): BaseMessage[] {
     return filterOrphanToolMessages(messages);
   }
 
   // ── Interrupt collection (aligned with Python _collect_interrupts) ──
 
-  protected static _collectInterrupts(tasks: any[] | null): any[] {
+  protected static _collectInterrupts(
+    tasks: Iterable<unknown> | unknown[] | null | undefined,
+  ): InterruptLike[] {
     return collectInterrupts(tasks);
   }
 
   // ── Stream kwargs builder (aligned with Python get_stream_kwargs) ──
 
   protected getStreamKwargs(opts: {
-    input: any;
-    config?: Record<string, any>;
+    input: unknown;
+    config?: RunnableConfigLike;
     subgraphs?: boolean;
     version?: "v1" | "v2";
-    context?: Record<string, any>;
-  }): { input: any; options: Record<string, any> } {
+    context?: Record<string, unknown>;
+  }): { input: unknown; options: RunnableConfigLike } {
     return getStreamArgs(opts);
   }
 
   // ── Prepare stream (aligned with Python prepare_stream) ──
 
   protected async prepareStream(
-    input: RunAgentInput & { forwarded_props?: ForwardedProps },
-    agentState: any,
-    config: Record<string, any>,
+    input: NormalizedRunAgentInput,
+    agentState: CheckpointSnapshotLike,
+    config: RunnableConfigLike,
   ): Promise<PreparedStream> {
     if (!this.activeRun) {
       throw new Error("prepareStream called outside an active run");
     }
 
-    const stateInput: State = { ...((input as any).state ?? {}) };
+    const stateInput: State = isRecord(input.state) ? { ...input.state } : {};
     const messages = input.messages ?? [];
-    const forwardedProps: ForwardedProps = (input as any).forwarded_props ?? {};
+    const forwardedProps = input.forwarded_props ?? {};
     const threadId = input.threadId;
 
     // Get checkpoint messages
-    const checkpointMessages: any[] = agentState?.values?.messages ?? [];
+    const checkpointMessages = snapshotMessages(agentState);
     stateInput.messages = checkpointMessages;
 
     const langchainMessages = aguiMessagesToLangchain(messages);
@@ -530,7 +842,9 @@ export class LangGraphAgent {
           .map((m) => m.id),
       );
       const checkpointIds = new Set(
-        checkpointMessages.filter((m: any) => m.id).map((m: any) => m.id),
+        checkpointMessages
+          .filter((message) => isRecord(message) && message.id)
+          .map((message) => (message as { id: unknown }).id),
       );
 
       const isContinuation =
@@ -539,7 +853,7 @@ export class LangGraphAgent {
 
       if (!isContinuation) {
         // Look for last HumanMessage for potential regeneration
-        let lastUserMessage: any = null;
+        let lastUserMessage: BaseMessage | null = null;
         for (let i = langchainMessages.length - 1; i >= 0; i--) {
           if (
             langchainMessages[i] instanceof HumanMessage ||
@@ -590,21 +904,19 @@ export class LangGraphAgent {
     // Continue mode: update state at checkpoint
     if (this.activeRun.mode === "continue") {
       try {
-        const graph = this.graph as any;
-        if (typeof graph.updateState === "function") {
-          await graph.updateState(
-            config,
-            state,
-            this.activeRun.node_name ?? undefined,
-          );
-        }
+        await updateGraphState(
+          this.graph,
+          config,
+          state,
+          this.activeRun.node_name ?? undefined,
+        );
       } catch {
         // State update is best-effort
       }
     }
 
     // Build stream input
-    let streamInput: any;
+    let streamInput: unknown;
     if (resumeInput) {
       streamInput = new Command({ resume: resumeInput });
     } else {
@@ -627,7 +939,7 @@ export class LangGraphAgent {
       version: "v2",
     });
 
-    const stream = this.graph.streamEvents(kwargs.input, kwargs.options as any);
+    const stream = streamGraphEvents(this.graph, kwargs.input, kwargs.options);
 
     return { stream, state, config };
   }
@@ -635,9 +947,9 @@ export class LangGraphAgent {
   // ── Prepare regenerate stream (aligned with Python prepare_regenerate_stream) ──
 
   protected async prepareRegenerateStream(
-    input: RunAgentInput,
-    messageCheckpoint: any,
-    config: Record<string, any>,
+    input: NormalizedRunAgentInput,
+    messageCheckpoint: BaseMessage,
+    config: RunnableConfigLike,
   ): Promise<PreparedStream> {
     const messageId = messageCheckpoint.id;
     const threadId = input.threadId;
@@ -659,18 +971,19 @@ export class LangGraphAgent {
       );
 
       const nextNodes = timeTravelCheckpoint.next ?? [];
-      const graph = this.graph as any;
-      const forwardedProps: ForwardedProps = (input as any).forwarded_props ?? {};
+      const forwardedProps = input.forwarded_props ?? {};
 
-      if (typeof graph.updateState === "function") {
-        const fork = await graph.updateState(
-          timeTravelCheckpoint.config,
-          timeTravelCheckpoint.values,
-          nextNodes.length > 0 ? nextNodes[0] : "__start__",
-        );
+      const fork = await updateGraphState(
+        this.graph,
+        timeTravelCheckpoint.config ?? config,
+        snapshotValues(timeTravelCheckpoint),
+        nextNodes.length > 0 ? nextNodes[0] : "__start__",
+      );
 
+      if (fork !== null) {
+        const checkpointValues = snapshotValues(timeTravelCheckpoint);
         const streamInput = this.langgraphDefaultMergeState(
-          timeTravelCheckpoint.values,
+          checkpointValues,
           [messageCheckpoint],
           input,
         );
@@ -679,33 +992,34 @@ export class LangGraphAgent {
           input: streamInput,
           config: {
             ...(Object.keys(config).length > 0 ? config : {}),
-            ...(fork as Record<string, unknown>),
+            ...(isRecord(fork) ? fork : {}),
           },
           subgraphs: forwardedProps.stream_subgraphs !== false,
           version: "v2",
         });
-        const stream = this.graph.streamEvents(
+        const stream = streamGraphEvents(
+          this.graph,
           kwargs.input,
-          kwargs.options as any,
+          kwargs.options,
         );
 
-        return { stream, state: timeTravelCheckpoint.values, config };
+        return { stream, state: checkpointValues, config };
       }
     } catch {
       // Time-travel is best-effort; fall through to normal stream
     }
 
     // Fallback: normal stream
-    const messages = toLangChainMessages(input.messages);
+    const messages = toLangChainMessages(input.messages ?? []);
     const agentState = this.langgraphDefaultMergeState({}, messages, input);
-    const forwardedProps: ForwardedProps = (input as any).forwarded_props ?? {};
+    const forwardedProps = input.forwarded_props ?? {};
     const kwargs = this.getStreamKwargs({
       input: agentState,
       config: Object.keys(config).length > 0 ? config : undefined,
       subgraphs: forwardedProps.stream_subgraphs !== false,
       version: "v2",
     });
-    const stream = this.graph.streamEvents(kwargs.input, kwargs.options as any);
+    const stream = streamGraphEvents(this.graph, kwargs.input, kwargs.options);
     return { stream, state: agentState, config };
   }
 
@@ -714,57 +1028,16 @@ export class LangGraphAgent {
   protected async getCheckpointBeforeMessage(
     messageId: string,
     threadId: string,
-    config?: Record<string, any>,
-  ): Promise<any> {
+    config?: RunnableConfigLike,
+  ): Promise<CheckpointSnapshotLike> {
     if (!threadId) throw new Error("Missing threadId");
 
-    const graph = this.graph as any;
-    if (typeof graph.getStateHistory !== "function") {
-      throw new Error("Graph does not support getStateHistory");
-    }
-
-    const historyConfig: Record<string, any> = config
-      ? {
-          ...config,
-          configurable: {
-            ...Object.fromEntries(
-              Object.entries(config.configurable ?? {}).filter(
-                ([k]) => k !== "checkpoint_id" && k !== "checkpoint_ns",
-              ),
-            ),
-            thread_id: threadId,
-          },
-        }
-      : { configurable: { thread_id: threadId } };
-
-    const historyList: any[] = [];
-    for await (const snapshot of graph.getStateHistory(historyConfig)) {
-      historyList.push(snapshot);
-    }
-
-    historyList.reverse();
-
-    for (let idx = 0; idx < historyList.length; idx++) {
-      const snapshot = historyList[idx];
-      const messages = snapshot.values?.messages ?? [];
-      if (messages.some((m: any) => m.id === messageId)) {
-        if (idx === 0) {
-          // No snapshot before this — return empty-messages version
-          return { ...snapshot, values: { ...snapshot.values, messages: [] } };
-        }
-        const checkpoint = historyList[idx - 1];
-        const snapshotValuesWithoutMessages = { ...snapshot.values };
-        delete snapshotValuesWithoutMessages.messages;
-        return {
-          ...checkpoint,
-          values: { ...checkpoint.values, ...snapshotValuesWithoutMessages },
-        };
-      }
-    }
-
-    throw new Error(
-      `Message ID "${messageId}" not found in history (thread_id=${threadId}, snapshots=${historyList.length})`,
-    );
+    return findCheckpointBeforeMessage({
+      graph: this.graph,
+      messageId,
+      threadId,
+      config,
+    });
   }
 
   // ── Default state merge (aligned with Python langgraph_default_merge_state) ──
@@ -780,15 +1053,14 @@ export class LangGraphAgent {
   // ── Main event loop (fully aligned with Python _handle_stream_events) ──
 
   protected async *_handleStreamEvents(
-    input: RunAgentInput & { forwarded_props?: ForwardedProps },
+    input: NormalizedRunAgentInput,
   ): AsyncGenerator<BaseEvent> {
     const threadId = input.threadId ?? uuid();
     const runId = input.runId ?? uuid();
     const frontendTools: Tool[] = input.tools ?? [];
     const frontendToolNames = new Set(frontendTools.map((t) => t.name));
-    const forwardedProps: ForwardedProps = (input as any).forwarded_props ?? {};
+    const forwardedProps = input.forwarded_props ?? {};
 
-    // Initialize run metadata
     this.activeRun = {
       id: runId,
       thread_id: threadId,
@@ -796,58 +1068,56 @@ export class LangGraphAgent {
       node_name: null,
       prev_node_name: null,
       has_function_streaming: false,
+      streamed_tool_call_ids: new Set<string>(),
       model_made_tool_call: false,
       state_reliable: true,
       reasoning_process: null,
       manually_emitted_state: null,
       wait_for_frontend_tool: false,
     };
+    this.activeTraceSpan = null;
+    this.lastSupervisorSpanId = undefined;
+    this.traceSpanCounters.clear();
+    this.linkedTraceMessages.clear();
+    this.linkedTraceTools.clear();
+    this.traceSpans.clear();
+    this.traceMessageOwners.clear();
+    this.traceToolOwners.clear();
+
+    for (const plugin of this.plugins) {
+      plugin.onRunStart?.(this.getPluginContext());
+    }
 
     try {
       const nodeNameInput = forwardedProps.node_name ?? null;
+      const config = buildRunConfig(this._config, threadId);
 
-      // Build config
-      const config: Record<string, any> = {
-        ...this._config,
-        configurable: {
-          ...((this._config.configurable as any) ?? {}),
-          thread_id: threadId,
-        },
-      };
-
-      // Try to get agent state from checkpoint (if graph supports it)
-      let agentState: any = null;
+      let agentState: CheckpointSnapshotLike | null = null;
       let usePrepareStream = false;
       try {
-        const graph = this.graph as any;
-        if (typeof graph.getState === "function") {
-          agentState = await graph.getState(config);
-          usePrepareStream = true;
+        agentState = await getGraphState(this.graph, config);
+        usePrepareStream = agentState !== null;
 
-          // Detect continue mode
-          const resumeInput = forwardedProps.command?.resume ?? null;
-          if (
-            resumeInput == null &&
-            threadId &&
-            this.activeRun.node_name !== "__end__" &&
-            agentState?.next?.length > 0
-          ) {
-            this.activeRun.mode = "continue";
-          }
+        const resumeInput = forwardedProps.command?.resume ?? null;
+        if (
+          resumeInput == null &&
+          threadId &&
+          this.activeRun.node_name !== "__end__" &&
+          (agentState?.next?.length ?? 0) > 0
+        ) {
+          this.activeRun.mode = "continue";
         }
       } catch {
-        // No checkpoint support — proceed with direct stream
+        // No checkpoint support — proceed with direct stream.
       }
 
-      // Determine stream via prepare_stream or direct
       let streamState: State;
-      let stream: AsyncIterable<any>;
+      let stream: AsyncIterable<LangGraphStreamEvent>;
       let streamConfig = config;
 
       if (usePrepareStream && agentState) {
         const prepared = await this.prepareStream(input, agentState, config);
 
-        // Handle early-exit events (e.g. interrupts without resume)
         if (
           prepared.events_to_dispatch &&
           prepared.events_to_dispatch.length > 0
@@ -863,8 +1133,7 @@ export class LangGraphAgent {
         streamState = prepared.state ?? {};
         streamConfig = prepared.config ?? config;
       } else {
-        // Direct stream (no checkpoint)
-        const messages = toLangChainMessages(input.messages);
+        const messages = toLangChainMessages(input.messages ?? []);
         streamState = this.langgraphDefaultMergeState({}, messages, input);
         const kwargs = this.getStreamKwargs({
           input: streamState,
@@ -872,10 +1141,9 @@ export class LangGraphAgent {
           subgraphs: forwardedProps.stream_subgraphs !== false,
           version: "v2",
         });
-        stream = this.graph.streamEvents(kwargs.input, kwargs.options as any);
+        stream = streamGraphEvents(this.graph, kwargs.input, kwargs.options);
       }
 
-      // Emit RUN_STARTED
       const startEv = this._dispatchEvent({
         type: EventType.RUN_STARTED,
         threadId,
@@ -883,12 +1151,10 @@ export class LangGraphAgent {
       } as BaseEvent);
       if (startEv) yield startEv;
 
-      // Handle initial node change from forwarded_props
-      for (const ev of this.handleNodeChange(nodeNameInput as string | null)) {
+      for (const ev of this.handleNodeChange(nodeNameInput)) {
         yield ev;
       }
 
-      // In case of resume, re-start resumed step
       const resumeInput = forwardedProps.command?.resume ?? null;
       if (resumeInput && this.activeRun.node_name) {
         for (const ev of this.handleNodeChange(this.activeRun.node_name)) {
@@ -899,35 +1165,43 @@ export class LangGraphAgent {
       let shouldExit = false;
       let currentGraphState: State = { ...streamState };
 
-      // ── Main stream loop ──
-      for await (const event of stream) {
-        const eventType = event.event as string;
-        const eventName = event.name as string;
-        const eventData = event.data;
+      for await (const rawEvent of stream) {
+        const event = asLangGraphStreamEvent(rawEvent);
+        const eventType = event.event;
+        const eventName = event.name ?? "";
+        const eventData = isRecord(event.data) ? event.data : {};
         const metadata = event.metadata ?? {};
 
-        // ── Subgraph boundary detection ──
-        const ns: string = (metadata.langgraph_checkpoint_ns as string) ?? "";
-        const nsRoot = ns ? ns.split("|")[0].split(":")[0] : "";
-        const currentSubgraph =
-          nsRoot && this.subgraphs.has(nsRoot) ? nsRoot : null;
+        const subgraphInfo = getSubgraphInfo({
+          eventType,
+          metadata,
+          subgraphs: this.subgraphs,
+          streamSubgraphs: forwardedProps.stream_subgraphs !== false,
+        });
 
-        const subgraphsStreamEnabled =
-          forwardedProps.stream_subgraphs !== false;
-        let isSubgraphStream = false;
-        if (subgraphsStreamEnabled) {
-          isSubgraphStream =
-            eventType.startsWith("events") ||
-            eventType.startsWith("values") ||
-            ns.includes("|") ||
-            currentSubgraph != null;
-        }
+        if (
+          subgraphInfo.isSubgraphStream &&
+          subgraphInfo.currentSubgraph !== this.currentSubgraph
+        ) {
+          const currentNodeName = this.activeRun.node_name;
+          const previousTraceStepName = this.getActiveTraceStepName();
+          this.currentSubgraph =
+            subgraphInfo.currentSubgraph ?? ROOT_SUBGRAPH_NAME;
+          const nextTraceStepName = currentNodeName
+            ? this.resolveTraceStepName(currentNodeName, event)
+            : null;
 
-        const graphContext = currentSubgraph ?? ROOT_SUBGRAPH_NAME;
+          if (
+            currentNodeName &&
+            previousTraceStepName &&
+            previousTraceStepName !== nextTraceStepName
+          ) {
+            yield* this.finishTraceSpan(previousTraceStepName, event);
+            if (nextTraceStepName) {
+              yield* this.startTraceSpan(currentNodeName, event);
+            }
+          }
 
-        if (isSubgraphStream && currentSubgraph !== this.currentSubgraph) {
-          this.currentSubgraph = currentSubgraph as string;
-          // Emit snapshots on subgraph boundary change
           for await (const snapEv of this.getStateAndMessagesSnapshots(
             streamConfig,
           )) {
@@ -935,11 +1209,9 @@ export class LangGraphAgent {
           }
         }
 
-        // ── Error event handling ──
         if (eventType === "error") {
-          const errorData = eventData ?? {};
           const errorMessage =
-            typeof errorData === "object" ? errorData?.message : null;
+            typeof eventData.message === "string" ? eventData.message : null;
           const ev = this._dispatchEvent({
             type: EventType.RUN_ERROR,
             message: errorMessage ?? "Unknown error",
@@ -948,8 +1220,10 @@ export class LangGraphAgent {
           break;
         }
 
-        // ── Node change detection ──
-        const currentNodeName: string | undefined = metadata.langgraph_node;
+        const currentNodeName =
+          typeof metadata.langgraph_node === "string"
+            ? metadata.langgraph_node
+            : undefined;
         const eventRunId = event.run_id;
         if (typeof eventRunId === "string" && eventRunId) {
           this.activeRun.id = eventRunId;
@@ -957,58 +1231,38 @@ export class LangGraphAgent {
 
         let exitingNode = false;
 
-        // ── on_chain_end state tracking ──
         if (
           eventType === LangGraphEventTypes.OnChainEnd &&
-          typeof eventData?.output === "object" &&
-          eventData.output !== null
+          isRecord(eventData.output)
         ) {
           const output = eventData.output;
           Object.assign(currentGraphState, output);
           exitingNode = this.activeRun.node_name === currentNodeName;
-          // If output has keys beyond protocol-internal, state is reliable
           if (
             Object.keys(output).some(
-              (k) => !["messages", "tools", "ag-ui"].includes(k),
+              (key) => !["messages", "tools", "ag-ui"].includes(key),
             )
           ) {
             this.activeRun.state_reliable = true;
           }
         }
 
-        // ── Exit detection ──
         shouldExit =
           shouldExit ||
           (eventType === LangGraphEventTypes.OnCustomEvent &&
             eventName === CustomEventNames.Exit);
 
-        // ── Node change ──
         if (currentNodeName && currentNodeName !== this.activeRun.node_name) {
-          for (const stepEvent of this.handleNodeChange(currentNodeName)) {
+          for (const stepEvent of this.handleNodeChange(
+            currentNodeName,
+            event,
+          )) {
             yield stepEvent;
           }
         }
 
-        // ── predict_state tracking ──
-        if (eventType === LangGraphEventTypes.OnChatModelStream) {
-          const chunk = eventData?.chunk;
-          const toolCallChunks = chunkGet(chunk, "tool_call_chunks") ?? [];
-          if (toolCallChunks.length > 0) {
-            const first = toolCallChunks[0];
-            const firstName = first?.name;
-            if (firstName) {
-              const predictStateMeta: any[] = metadata.predict_state ?? [];
-              const toolUsedToPredictState = predictStateMeta.some(
-                (p: any) => (p?.tool ?? p) === firstName,
-              );
-              if (toolUsedToPredictState) {
-                this.activeRun.model_made_tool_call = true;
-              }
-            }
-          }
-        }
+        markPredictStateToolIfNeeded(event, this.activeRun);
 
-        // ── State snapshot on node exit / state diff ──
         const manuallyEmitted = this.activeRun.manually_emitted_state;
         const updatedState =
           manuallyEmitted !== undefined && manuallyEmitted !== null
@@ -1024,13 +1278,14 @@ export class LangGraphAgent {
           this.activeRun.prev_node_name = this.activeRun.node_name;
           Object.assign(currentGraphState, updatedState);
 
-          const mmtc = this.activeRun.model_made_tool_call;
+          const modelMadeToolCall = this.activeRun.model_made_tool_call;
           const stateReliable = this.activeRun.state_reliable ?? true;
-          const suppressed = exitingNode && (mmtc || !stateReliable);
+          const suppressed =
+            exitingNode && (modelMadeToolCall || !stateReliable);
 
           if (suppressed) {
             this.activeRun.model_made_tool_call = false;
-            if (mmtc) {
+            if (modelMadeToolCall) {
               this.activeRun.state_reliable = false;
             }
           } else {
@@ -1042,14 +1297,12 @@ export class LangGraphAgent {
           }
         }
 
-        // ── RawEvent passthrough ──
         const rawEv = this._dispatchEvent({
           type: EventType.RAW,
-          event: event,
+          event,
         } as BaseEvent);
         if (rawEv) yield rawEv;
 
-        // ── Dispatch individual events ──
         for await (const agUiEvent of this._handleSingleEvent(
           event,
           frontendToolNames,
@@ -1058,33 +1311,30 @@ export class LangGraphAgent {
           yield agUiEvent;
         }
 
-        if (this.activeRun.wait_for_frontend_tool) {
+        if (this.activeRun.wait_for_frontend_tool || shouldExit) {
           break;
         }
       }
 
-      // ── Post-stream: check state for interrupts and final node ──
       try {
-        const graph = this.graph as any;
-        if (typeof graph.getState === "function") {
-          const finalState = await graph.getState(streamConfig);
-          const tasks = finalState?.tasks ?? null;
+        const finalState = await getGraphState(this.graph, streamConfig);
+        if (finalState) {
           const interrupts = LangGraphAgent._collectInterrupts(
-            tasks ? [...tasks] : null,
+            finalState.tasks,
           );
-
-          const stateMetadata = finalState?.metadata ?? {};
-          const writes = stateMetadata.writes ?? {};
+          const stateMetadata = finalState.metadata ?? {};
+          const writes = isRecord(stateMetadata.writes)
+            ? stateMetadata.writes
+            : {};
           let nodeName: string | null =
             interrupts.length > 0
               ? (this.activeRun.node_name ?? null)
               : (Object.keys(writes)[0] ?? null);
 
-          const nextNodes = finalState?.next ?? [];
+          const nextNodes = finalState.next ?? [];
           const isEndNode = nextNodes.length === 0 && interrupts.length === 0;
           nodeName = isEndNode ? "__end__" : nodeName;
 
-          // Emit interrupt events
           for (const interrupt of interrupts) {
             const ev = this._dispatchEvent({
               type: EventType.CUSTOM,
@@ -1094,14 +1344,12 @@ export class LangGraphAgent {
             if (ev) yield ev;
           }
 
-          // Final node change
           if (this.activeRun.node_name !== nodeName) {
             for (const ev of this.handleNodeChange(nodeName)) {
               yield ev;
             }
           }
 
-          // Final state & messages snapshot
           for await (const ev of this.getStateAndMessagesSnapshots(
             streamConfig,
           )) {
@@ -1109,15 +1357,13 @@ export class LangGraphAgent {
           }
         }
       } catch {
-        // Post-stream state check is best-effort
+        // Post-stream state check is best-effort.
       }
 
-      // Close open steps
       for (const stepEvent of this.handleNodeChange(null)) {
         yield stepEvent;
       }
 
-      // Emit RUN_FINISHED
       const finishEv = this._dispatchEvent({
         type: EventType.RUN_FINISHED,
         threadId,
@@ -1125,477 +1371,49 @@ export class LangGraphAgent {
       } as BaseEvent);
       if (finishEv) yield finishEv;
     } finally {
+      for (const plugin of this.plugins) {
+        plugin.onRunFinish?.(this.getPluginContext());
+      }
+      this.activeTraceSpan = null;
+      this.lastSupervisorSpanId = undefined;
+      this.traceSpanCounters.clear();
+      this.linkedTraceMessages.clear();
+      this.linkedTraceTools.clear();
+      this.traceSpans.clear();
+      this.traceMessageOwners.clear();
+      this.traceToolOwners.clear();
       this.activeRun = null;
     }
   }
 
-  // ── Single event handler (fully aligned with Python _handle_single_event) ──
-
   protected async *_handleSingleEvent(
-    event: any,
+    event: LangGraphStreamEvent,
     frontendToolNames: Set<string>,
     currentState?: State,
   ): AsyncGenerator<BaseEvent> {
+    void currentState;
     if (!this.activeRun) {
       throw new Error("_handleSingleEvent called outside an active run");
     }
 
-    const eventType = event.event as string;
-    const eventData = event.data;
-    const metadata = event.metadata ?? {};
-    const runId = this.activeRun.id;
-
-    // ── on_chat_model_stream ──
-    if (eventType === LangGraphEventTypes.OnChatModelStream) {
-      const shouldEmitMessages = metadata["emit-messages"] !== false;
-      const shouldEmitToolCalls = metadata["emit-tool-calls"] !== false;
-
-      const chunk = eventData?.chunk;
-      if (!chunk) return;
-
-      const responseMeta = chunkGet(chunk, "response_metadata") ?? {};
-      const toolCallChunks: any[] = chunkGet(chunk, "tool_call_chunks") ?? [];
-
-      if (responseMeta?.finish_reason) return;
-
-      const currentStream = this.getMessageInProgress(runId);
-      const hasCurrentStream = !!(currentStream && currentStream.id);
-      const hasToolCallChunks = toolCallChunks.length > 0;
-
-      // predict_state metadata check
-      const predictStateMeta: any[] = metadata.predict_state ?? [];
-      let toolCallUsedToPredictState = false;
-      if (hasToolCallChunks && predictStateMeta.length > 0) {
-        toolCallUsedToPredictState = predictStateMeta.some((p: any) =>
-          toolCallChunks.some(
-            (toolCallData: any) => (p?.tool ?? p) === toolCallData?.name,
-          ),
-        );
-      }
-
-      if (hasToolCallChunks) {
-        this.activeRun.has_function_streaming = true;
-      }
-
-      const chunkContent = chunkGet(chunk, "content");
-      const chunkId = chunkGet(chunk, "id") ?? uuid();
-
-      // Reasoning handling
-      const reasoningData = resolveReasoningContent(chunk);
-      const encryptedReasoningData = resolveEncryptedReasoningContent(chunk);
-
-      const messageContent =
-        chunkContent !== null && chunkContent !== undefined
-          ? resolveMessageContent(chunkContent)
-          : null;
-
-      // Use `is not None` semantics: empty string "" is valid content
-      const isMessageContentEvent =
-        !hasToolCallChunks && messageContent !== null;
-      const hasActiveToolCalls = Boolean(
-        currentStream?.active_tool_calls &&
-        Object.keys(currentStream.active_tool_calls).length > 0,
-      );
-      const isMessageEndEvent =
-        hasCurrentStream && !hasActiveToolCalls && !isMessageContentEvent;
-
-      // Handle reasoning
-      if (reasoningData) {
-        yield* this.handleReasoningEvent(
+    for await (const agUiEvent of translateSingleEvent(event, {
+      activeRun: this.activeRun,
+      frontendToolNames,
+      getMessageInProgress: (id) => this.getMessageInProgress(id),
+      setMessageInProgress: (id, value) => this.setMessageInProgress(id, value),
+      clearMessageInProgress: (id) => {
+        this.messagesInProgress[id] = null;
+      },
+      dispatchEvent: (ev) => this._dispatchEvent(ev),
+      handleReasoningEvent: (reasoningData, encryptedData, parentMessageId) =>
+        this.handleReasoningEvent(
           reasoningData,
-          null,
-          currentStream?.id ?? chunkId,
-        );
-        return;
-      }
-
-      // Handle encrypted reasoning
-      if (encryptedReasoningData && this.activeRun.reasoning_process) {
-        yield* this.handleReasoningEvent(
-          null,
-          encryptedReasoningData,
-          currentStream?.id ?? chunkId,
-        );
-        return;
-      }
-
-      // Reasoning ended (no more reasoning data but process was active)
-      if (!reasoningData && this.activeRun.reasoning_process) {
-        yield* this.handleReasoningEvent(null, null, currentStream?.id ?? chunkId);
-      }
-
-      // predict_state custom event
-      if (toolCallUsedToPredictState) {
-        const ev = this._dispatchEvent({
-          type: EventType.CUSTOM,
-          name: "PredictState",
-          value: predictStateMeta,
-        } as BaseEvent);
-        if (ev) yield ev;
-      }
-
-      // ── Message END ──
-      if (isMessageEndEvent) {
-        const ev = this._dispatchEvent({
-          type: EventType.TEXT_MESSAGE_END,
-          messageId: currentStream!.id,
-        } as BaseEvent);
-        if (ev) yield ev;
-        this.messagesInProgress[runId] = null;
-        return;
-      }
-
-      // ── Tool call STREAM ──
-      if (hasToolCallChunks && shouldEmitToolCalls) {
-        const parentMessageId = currentStream?.id ?? chunkId;
-        const toolCallInfoByIndex = {
-          ...(currentStream?.tool_call_info_by_index ?? {}),
-        };
-        const activeToolCalls = {
-          ...(currentStream?.active_tool_calls ?? {}),
-        };
-
-        for (const toolCallData of toolCallChunks) {
-          const index =
-            typeof toolCallData?.index === "number" ? toolCallData.index : 0;
-          const cachedToolCallInfo = toolCallInfoByIndex[index];
-          const toolCallId =
-            toolCallData?.id ?? cachedToolCallInfo?.id ?? uuid();
-          const toolCallName =
-            toolCallData?.name ?? cachedToolCallInfo?.name ?? "unknown";
-
-          toolCallInfoByIndex[index] = {
-            id: toolCallId,
-            name: toolCallName,
-          };
-
-          if (toolCallData?.name && !activeToolCalls[toolCallId]) {
-            const startEv = this._dispatchEvent({
-              type: EventType.TOOL_CALL_START,
-              toolCallId,
-              toolCallName,
-              parentMessageId,
-            } as BaseEvent);
-            if (startEv) yield startEv;
-            activeToolCalls[toolCallId] = {
-              name: toolCallName,
-              index,
-            };
-          }
-
-          if (
-            toolCallData?.args !== undefined &&
-            toolCallData?.args !== null &&
-            toolCallData?.args !== ""
-          ) {
-            const argsEv = this._dispatchEvent({
-              type: EventType.TOOL_CALL_ARGS,
-              toolCallId,
-              delta:
-                typeof toolCallData.args === "string"
-                  ? toolCallData.args
-                  : JSON.stringify(toolCallData.args),
-            } as BaseEvent);
-            if (argsEv) yield argsEv;
-          }
-        }
-
-        this.setMessageInProgress(runId, {
-          id: parentMessageId,
-          tool_call_id: null,
-          tool_call_name: null,
-          tool_call_info_by_index: toolCallInfoByIndex,
-          active_tool_calls: activeToolCalls,
-        });
-        return;
-      }
-
-      // ── Text message content ──
-      if (isMessageContentEvent && shouldEmitMessages) {
-        // Skip empty-string deltas (AG-UI TextMessageContentEvent requires min_length=1)
-        if (messageContent === "") return;
-
-        if (!hasCurrentStream) {
-          const startEv = this._dispatchEvent({
-            type: EventType.TEXT_MESSAGE_START,
-            role: "assistant",
-            messageId: chunkId,
-          } as BaseEvent);
-          if (startEv) yield startEv;
-
-          this.setMessageInProgress(runId, {
-            id: chunkId,
-            tool_call_id: null,
-            tool_call_name: null,
-            tool_call_info_by_index: {},
-            active_tool_calls: {},
-          });
-        }
-
-        const current = this.getMessageInProgress(runId);
-        const contentEv = this._dispatchEvent({
-          type: EventType.TEXT_MESSAGE_CONTENT,
-          messageId: current?.id ?? chunkId,
-          delta: messageContent,
-        } as BaseEvent);
-        if (contentEv) yield contentEv;
-        return;
-      }
-
-      return;
-    }
-
-    // ── on_chat_model_end ──
-    if (eventType === LangGraphEventTypes.OnChatModelEnd) {
-      const currentStream = this.getMessageInProgress(runId);
-      const activeToolCalls = currentStream?.active_tool_calls ?? {};
-      const activeToolCallIds = Object.keys(activeToolCalls);
-      if (activeToolCallIds.length > 0) {
-        for (const toolCallId of activeToolCallIds) {
-          const ev = this._dispatchEvent({
-            type: EventType.TOOL_CALL_END,
-            toolCallId,
-          } as BaseEvent);
-          if (ev) {
-            yield ev;
-          }
-        }
-        if (
-          activeToolCallIds.some((toolCallId) =>
-            frontendToolNames.has(activeToolCalls[toolCallId]?.name ?? ""),
-          )
-        ) {
-          this.activeRun.wait_for_frontend_tool = true;
-        }
-        this.messagesInProgress[runId] = null;
-      } else if (currentStream?.id) {
-        const ev = this._dispatchEvent({
-          type: EventType.TEXT_MESSAGE_END,
-          messageId: currentStream.id,
-        } as BaseEvent);
-        if (ev) {
-          this.messagesInProgress[runId] = null;
-          yield ev;
-        }
-      }
-      return;
-    }
-
-    // ── on_custom_event ──
-    if (eventType === LangGraphEventTypes.OnCustomEvent) {
-      const customName = event.name as string;
-      const customData = eventData;
-
-      if (customName === CustomEventNames.ManuallyEmitMessage) {
-        const msgId = customData?.message_id ?? uuid();
-        let ev: BaseEvent | null;
-
-        ev = this._dispatchEvent({
-          type: EventType.TEXT_MESSAGE_START,
-          role: "assistant",
-          messageId: msgId,
-        } as BaseEvent);
-        if (ev) yield ev;
-
-        ev = this._dispatchEvent({
-          type: EventType.TEXT_MESSAGE_CONTENT,
-          messageId: msgId,
-          delta: contentToString(
-            customData?.message ?? customData?.content ?? customData,
-          ),
-        } as BaseEvent);
-        if (ev) yield ev;
-
-        ev = this._dispatchEvent({
-          type: EventType.TEXT_MESSAGE_END,
-          messageId: msgId,
-        } as BaseEvent);
-        if (ev) yield ev;
-      } else if (customName === CustomEventNames.ManuallyEmitToolCall) {
-        const tcId = customData?.id ?? uuid();
-        let ev: BaseEvent | null;
-
-        ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_START,
-          toolCallId: tcId,
-          toolCallName: customData?.name ?? "unknown_tool",
-          parentMessageId: tcId,
-        } as BaseEvent);
-        if (ev) yield ev;
-
-        ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_ARGS,
-          toolCallId: tcId,
-          delta:
-            typeof customData?.args === "string"
-              ? customData.args
-              : JSON.stringify(customData?.args ?? {}),
-        } as BaseEvent);
-        if (ev) yield ev;
-
-        ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_END,
-          toolCallId: tcId,
-        } as BaseEvent);
-        if (ev) yield ev;
-      } else if (customName === CustomEventNames.ManuallyEmitState) {
-        this.activeRun.manually_emitted_state = customData;
-        const ev = this._dispatchEvent({
-          type: EventType.STATE_SNAPSHOT,
-          snapshot: this.getStateSnapshot(customData),
-        } as BaseEvent);
-        if (ev) yield ev;
-      }
-
-      // Always emit as CUSTOM pass-through
-      const customEv = this._dispatchEvent({
-        type: EventType.CUSTOM,
-        name: customName,
-        value: customData,
-      } as BaseEvent);
-      if (customEv) yield customEv;
-
-      return;
-    }
-
-    // ── on_tool_end ──
-    if (eventType === LangGraphEventTypes.OnToolEnd) {
-      const toolCallOutput = eventData?.output;
-      if (!toolCallOutput) return;
-
-      // Check if output is a Command
-      const isCommand =
-        toolCallOutput?.constructor?.name === "Command" ||
-        (toolCallOutput?.update && typeof toolCallOutput.update === "object");
-
-      if (isCommand) {
-        // Extract ToolMessages from Command.update
-        const update = toolCallOutput.update;
-        const messages: any[] =
-          typeof update === "object" && update !== null
-            ? (update.messages ?? [])
-            : [];
-
-        const toolMessages = messages.filter(
-          (m: any) => m instanceof ToolMessage || m?._getType?.() === "tool",
-        );
-
-        for (const toolMsg of toolMessages) {
-          const toolCallId = toolMsg.tool_call_id;
-          if (!toolCallId) continue;
-          const toolCallName = toolMsg.name ?? event.name ?? "";
-
-          if (!this.activeRun.has_function_streaming) {
-            let ev: BaseEvent | null;
-            ev = this._dispatchEvent({
-              type: EventType.TOOL_CALL_START,
-              toolCallId,
-              toolCallName,
-              parentMessageId: toolMsg.id,
-            } as BaseEvent);
-            if (ev) yield ev;
-
-            ev = this._dispatchEvent({
-              type: EventType.TOOL_CALL_ARGS,
-              toolCallId,
-              delta: jsonSafeStringify(eventData?.input ?? {}),
-            } as BaseEvent);
-            if (ev) yield ev;
-
-            ev = this._dispatchEvent({
-              type: EventType.TOOL_CALL_END,
-              toolCallId,
-            } as BaseEvent);
-            if (ev) yield ev;
-          }
-
-          if (frontendToolNames.has(toolCallName)) {
-            this.activeRun.wait_for_frontend_tool = true;
-            continue;
-          }
-
-          const resultEv = this._dispatchEvent({
-            type: EventType.TOOL_CALL_RESULT,
-            toolCallId,
-            messageId: uuid(),
-            content: normalizeToolContent(toolMsg.content),
-            role: "tool",
-          } as BaseEvent);
-          if (resultEv) yield resultEv;
-        }
-
-        this.activeRun.model_made_tool_call = false;
-        this.activeRun.state_reliable = true;
-        this.activeRun.has_function_streaming = false;
-        return;
-      }
-
-      // Non-Command ToolMessage output
-      if (
-        !(toolCallOutput instanceof ToolMessage) &&
-        toolCallOutput?._getType?.() !== "tool"
-      ) {
-        // Not a ToolMessage — skip
-        return;
-      }
-
-      const toolCallId = toolCallOutput.tool_call_id;
-      if (!toolCallId) return;
-      const toolCallName = toolCallOutput.name ?? event.name ?? "";
-
-      if (!this.activeRun.has_function_streaming) {
-        let ev: BaseEvent | null;
-        ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_START,
-          toolCallId,
-          toolCallName,
-          parentMessageId: toolCallOutput.id,
-        } as BaseEvent);
-        if (ev) yield ev;
-
-        ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_ARGS,
-          toolCallId,
-          delta: jsonSafeStringify(eventData?.input ?? {}),
-        } as BaseEvent);
-        if (ev) yield ev;
-
-        ev = this._dispatchEvent({
-          type: EventType.TOOL_CALL_END,
-          toolCallId,
-        } as BaseEvent);
-        if (ev) yield ev;
-      }
-
-      if (frontendToolNames.has(toolCallName)) {
-        this.activeRun.model_made_tool_call = false;
-        this.activeRun.state_reliable = true;
-        this.activeRun.has_function_streaming = false;
-        this.activeRun.wait_for_frontend_tool = true;
-        return;
-      }
-
-      const resultEv = this._dispatchEvent({
-        type: EventType.TOOL_CALL_RESULT,
-        toolCallId,
-        messageId: uuid(),
-        content: normalizeToolContent(toolCallOutput.content),
-        role: "tool",
-      } as BaseEvent);
-      if (resultEv) yield resultEv;
-
-      this.activeRun.model_made_tool_call = false;
-      this.activeRun.state_reliable = true;
-      this.activeRun.has_function_streaming = false;
-      return;
-    }
-
-    // ── on_tool_error ──
-    if (eventType === LangGraphEventTypes.OnToolError) {
-      this.activeRun.model_made_tool_call = false;
-      this.activeRun.state_reliable = true;
-      this.activeRun.has_function_streaming = false;
-      return;
+          encryptedData,
+          parentMessageId,
+        ),
+    })) {
+      yield agUiEvent;
+      yield* this.emitTraceLinksForEvent(agUiEvent, event);
     }
   }
 }

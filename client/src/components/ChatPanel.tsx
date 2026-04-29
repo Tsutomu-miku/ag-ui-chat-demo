@@ -9,6 +9,11 @@ import {
 import { MessageBubble } from "./MessageBubble";
 import { FrontendToolUI } from "./FrontendToolUI";
 import { ExecutionTree } from "./ExecutionTree";
+import {
+  buildTurnPresentation,
+  filterTraceEventsForTurn,
+  getMessageSourceLabel,
+} from "./trace";
 import { FRONTEND_TOOLS } from "../tools/frontendTools";
 
 type DemoMode = "agent" | "protocol";
@@ -87,7 +92,6 @@ export function ChatPanel({
     frontendTools: FRONTEND_TOOLS,
     onThreadEvent: threadActions.handleThreadEvent,
   });
-
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -121,23 +125,15 @@ export function ChatPanel({
 
     await sendMessage(
       threadId,
-      [
-        {
-          id: userMsg.id,
-          role: userMsg.role,
-          content: userMsg.content,
-        },
-      ],
+      [userMsg],
       async () => {
         await threadActions.refreshList();
       },
-      demoMode === "protocol"
-        ? {
-            forwardedProps: {
-              streamSubgraphs: true,
-            },
-          }
-        : undefined,
+      {
+        forwardedProps: {
+          streamSubgraphs: true,
+        },
+      },
     );
   }, [demoMode, input, isStreaming, thread, threadActions, sendMessage]);
 
@@ -167,6 +163,7 @@ export function ChatPanel({
   };
 
   const messages = thread?.messages ?? [];
+  const traceEvents = thread?.traceEvents ?? [];
   const { hasMessages, hasStreamingMessage, hasActiveToolCall } =
     buildMessageView(messages);
   const conversationTurns = buildConversationTurns(messages);
@@ -221,12 +218,14 @@ export function ChatPanel({
             <div className="welcome-icon">AG</div>
             <h2>AG-UI LangGraph Demo</h2>
             <p>
-              Run a live agent or switch to a deterministic protocol lab that
-              exercises the adapter without an LLM key.
+              Run the LangGraph supervisor with researcher and writer
+              sub-agents, or switch to a deterministic protocol lab when no LLM
+              key is set.
             </p>
             <div className="protocol-strip">
+              <span>supervisor</span>
+              <span>handoff tools</span>
               <span>text stream</span>
-              <span>tool calls</span>
               <span>state snapshot</span>
               <span>frontend resume</span>
             </div>
@@ -247,14 +246,14 @@ export function ChatPanel({
               <div
                 className="feature-card"
                 onClick={() =>
-                  selectPrompt("agent", "What's the weather like in Tokyo?")
+                  selectPrompt("protocol", "Run the sub-agent tree demo")
                 }
               >
-                <span className="feature-emoji">🌤</span>
+                <span className="feature-emoji">🌲</span>
                 <span>
-                  Weather lookup
+                  Sub-agent Tree
                   <br />
-                  <small>Researcher agent</small>
+                  <small>Deterministic handoff</small>
                 </span>
               </div>
               <div
@@ -262,15 +261,31 @@ export function ChatPanel({
                 onClick={() =>
                   selectPrompt(
                     "agent",
-                    "Research the latest AI agent frameworks and write a summary report",
+                    "Ask the researcher for the weather in Tokyo, then ask the writer for a concise travel note.",
+                  )
+                }
+              >
+                <span className="feature-emoji">🌤</span>
+                <span>
+                  Research + write
+                  <br />
+                  <small>Supervisor handoff</small>
+                </span>
+              </div>
+              <div
+                className="feature-card"
+                onClick={() =>
+                  selectPrompt(
+                    "agent",
+                    "Research practical use cases for AG-UI agents, then write a short implementation brief with bullets.",
                   )
                 }
               >
                 <span className="feature-emoji">📝</span>
                 <span>
-                  Research &amp; Write
+                  Briefing chain
                   <br />
-                  <small>Multi-agent</small>
+                  <small>Researcher to writer</small>
                 </span>
               </div>
               <div
@@ -278,7 +293,7 @@ export function ChatPanel({
                 onClick={() =>
                   selectPrompt(
                     "agent",
-                    "Calculate (23 * 45) + (67 / 3) and explain the result",
+                    "Ask the writer to calculate (23 * 45) + (67 / 3), then explain the result in one paragraph.",
                   )
                 }
               >
@@ -294,7 +309,7 @@ export function ChatPanel({
                 onClick={() =>
                   selectPrompt(
                     "agent",
-                    "I need to deploy the production server, please confirm this action",
+                    "Prepare a short deployment note, but confirm with me before treating the production deploy as approved.",
                   )
                 }
               >
@@ -316,9 +331,18 @@ export function ChatPanel({
 
         {conversationTurns.map((turn, index) => {
           const isLatestTurn = index === conversationTurns.length - 1;
-          const shouldShowTree =
-            turn.events.length > 0 ||
-            (isLatestTurn && threadActions.activeSteps.length > 0);
+          const turnActiveSteps = isLatestTurn ? threadActions.activeSteps : [];
+          const turnTraceEvents = filterTraceEventsForTurn(
+            traceEvents,
+            turn.events,
+            isLatestTurn,
+          );
+          const presentation = buildTurnPresentation(
+            turn.events,
+            turnActiveSteps,
+            turnTraceEvents,
+          );
+          const shouldShowTree = presentation.traceMode !== "none";
 
           return (
             <div key={turn.id}>
@@ -328,12 +352,22 @@ export function ChatPanel({
                   isStreaming={turn.user.isStreaming}
                 />
               )}
-              {shouldShowTree && (
+              {shouldShowTree && presentation.traceMode !== "none" && (
                 <ExecutionTree
                   messages={turn.events}
-                  activeSteps={isLatestTurn ? threadActions.activeSteps : []}
+                  activeSteps={turnActiveSteps}
+                  traceEvents={turnTraceEvents}
+                  mode={presentation.traceMode}
                 />
               )}
+              {presentation.standaloneMessages.map((message) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  isStreaming={message.isStreaming}
+                  sourceLabel={getMessageSourceLabel(message)}
+                />
+              ))}
             </div>
           );
         })}

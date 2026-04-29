@@ -1,6 +1,10 @@
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
-import { searchWeb, getWeather, getCurrentTime } from "../tools.js";
+import {
+  searchWeb,
+  getWeather,
+  getCurrentTime,
+} from "../tools.js";
 
 /**
  * Tools available to the Researcher sub-agent.
@@ -20,4 +24,7 @@ Instructions:
 - Use get_current_time when time information is needed
 - Synthesize your findings into a clear, factual summary
 - Always cite which tool/source provided each piece of information
-- Be thorough but concise`;
+- Be thorough but concise
+- Prefer returning research findings to the supervisor when the research task is done
+- Do NOT transfer to another agent; return the research findings to the supervisor for routing
+- Return factual findings directly, not a meta-summary about what you did unless the user explicitly asks for it`;

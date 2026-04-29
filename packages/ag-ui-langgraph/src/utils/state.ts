@@ -9,6 +9,7 @@ import {
 
 import { normalizeToolContent } from "./convert.js";
 import type { State } from "../types.js";
+import { isRecord } from "../events/guards.js";
 
 export const A2UI_SCHEMA_CONTEXT_DESCRIPTION =
   "A2UI Component Schema — available components for generating UI surfaces.\nUse these component names and props when creating A2UI operations.";
@@ -16,30 +17,41 @@ export const A2UI_SCHEMA_CONTEXT_DESCRIPTION =
 export const ORPHAN_TOOL_MESSAGE_RE =
   /^(?:Error: No tool call found with id|Tool call '.+' with id '.+' was interrupted before completion\.)/;
 
-export function filterOrphanToolMessages(messages: any[]): any[] {
+function messageType(message: unknown): string | undefined {
+  if (message instanceof HumanMessage) return "human";
+  if (message instanceof AIMessage) return "ai";
+  if (message instanceof SystemMessage) return "system";
+  if (message instanceof ToolMessage) return "tool";
+  if (!isRecord(message)) return undefined;
+  const getType = message._getType;
+  return typeof getType === "function" ? getType.call(message) : undefined;
+}
+
+function isToolMessage(message: unknown): message is ToolMessage {
+  return message instanceof ToolMessage || messageType(message) === "tool";
+}
+
+export function filterOrphanToolMessages(messages: unknown[]): BaseMessage[] {
   let lastHumanIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (
-      messages[i] instanceof HumanMessage ||
-      messages[i]?._getType?.() === "human"
-    ) {
+    if (messageType(messages[i]) === "human") {
       lastHumanIdx = i;
       break;
     }
   }
 
-  if (lastHumanIdx === -1) return messages;
+  if (lastHumanIdx === -1) return messages as BaseMessage[];
 
   const head = messages.slice(0, lastHumanIdx + 1);
   const tail = messages.slice(lastHumanIdx + 1).filter((message) => {
     return !(
-      (message instanceof ToolMessage || message?._getType?.() === "tool") &&
-      typeof message.content === "string" &&
-      ORPHAN_TOOL_MESSAGE_RE.test(message.content)
+      isToolMessage(message) &&
+      typeof (message as ToolMessage).content === "string" &&
+      ORPHAN_TOOL_MESSAGE_RE.test((message as ToolMessage).content as string)
     );
   });
 
-  return [...head, ...tail];
+  return [...head, ...tail] as BaseMessage[];
 }
 
 function stripLeadingSystemMessage(messages: BaseMessage[]): BaseMessage[] {
@@ -55,11 +67,11 @@ function stripLeadingSystemMessage(messages: BaseMessage[]): BaseMessage[] {
 
 function normalizePersistedToolArgs(messages: BaseMessage[]): void {
   for (const message of messages) {
-    if (!(message instanceof AIMessage) && message?._getType?.() !== "ai") {
+    if (messageType(message) !== "ai") {
       continue;
     }
     const toolCalls = (message as AIMessage).tool_calls ?? [];
-    for (const toolCall of toolCalls as Array<Record<string, any>>) {
+    for (const toolCall of toolCalls as Array<Record<string, unknown>>) {
       if (typeof toolCall.args !== "string") continue;
       try {
         toolCall.args = JSON.parse(toolCall.args);
@@ -76,7 +88,7 @@ function repairInterruptedToolMessages(
 ): Set<string> {
   const aguiToolContent = new Map<string, unknown>();
   for (const message of incomingMessages) {
-    if (message instanceof ToolMessage || message?._getType?.() === "tool") {
+    if (isToolMessage(message)) {
       const toolCallId = (message as ToolMessage).tool_call_id;
       if (toolCallId) aguiToolContent.set(toolCallId, message.content);
     }
@@ -87,10 +99,7 @@ function repairInterruptedToolMessages(
 
   let lastHumanIdx = -1;
   for (let i = existingMessages.length - 1; i >= 0; i--) {
-    if (
-      existingMessages[i] instanceof HumanMessage ||
-      existingMessages[i]?._getType?.() === "human"
-    ) {
+    if (messageType(existingMessages[i]) === "human") {
       lastHumanIdx = i;
       break;
     }
@@ -101,7 +110,7 @@ function repairInterruptedToolMessages(
     const message = existingMessages[i];
     const toolCallId = (message as ToolMessage).tool_call_id;
     if (
-      (message instanceof ToolMessage || message?._getType?.() === "tool") &&
+      isToolMessage(message) &&
       typeof message.content === "string" &&
       ORPHAN_TOOL_MESSAGE_RE.test(message.content) &&
       toolCallId &&
@@ -130,7 +139,7 @@ function appendOnlyNewMessages(
     if (message.id && existingMessageIds.has(message.id)) return false;
     const toolCallId = (message as ToolMessage).tool_call_id;
     return !(
-      (message instanceof ToolMessage || message?._getType?.() === "tool") &&
+      isToolMessage(message) &&
       toolCallId &&
       replacedToolCallIds.has(toolCallId)
     );
@@ -162,8 +171,8 @@ function splitA2uiContext(input: RunAgentInput): {
   a2uiSchema?: unknown;
   regularContext: unknown[];
 } {
-  const context = Array.isArray((input as any).context)
-    ? ((input as any).context as Array<Record<string, unknown>>)
+  const context = Array.isArray((input as { context?: unknown }).context)
+    ? ((input as { context?: unknown }).context as Array<Record<string, unknown>>)
     : [];
   let a2uiSchema: unknown;
   const regularContext: unknown[] = [];

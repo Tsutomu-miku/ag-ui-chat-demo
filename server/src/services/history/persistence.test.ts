@@ -1,8 +1,13 @@
 import { EventType, type Message } from "@ag-ui/core";
+import { AG_UI_TRACE_EVENT_NAME } from "ag-ui-langgraph";
 import { describe, expect, it } from "vitest";
 
 import { persistHistory } from "./persistence.js";
 import { getThread } from "./store.js";
+
+const TOOL_RESULT_START_EVENT = "ag-ui.tool_result_start";
+const TOOL_RESULT_DELTA_EVENT = "ag-ui.tool_result_delta";
+const TOOL_RESULT_END_EVENT = "ag-ui.tool_result_end";
 
 describe("persistHistory", () => {
   it("merges text chunks into one assistant message", () => {
@@ -80,6 +85,9 @@ describe("persistHistory", () => {
       toolCallId: "tool-2",
       content: "4",
     });
+    expect(thread?.traceEvents.some((event) => event.type === EventType.TOOL_CALL_RESULT)).toBe(
+      true,
+    );
   });
 
   it("keeps tool calls on the same assistant message when tool events arrive after text end", () => {
@@ -122,5 +130,231 @@ describe("persistHistory", () => {
         },
       ],
     });
+  });
+
+  it("persists partial tool args before tool_end so replay can recover in-progress input", () => {
+    const threadId = `thread-${crypto.randomUUID()}`;
+
+    persistHistory(threadId, [], [
+      { type: EventType.RUN_STARTED, threadId, runId: "run-partial-tool-1" },
+      { type: EventType.TEXT_MESSAGE_START, messageId: "assistant-partial-1", role: "assistant" },
+      {
+        type: EventType.TOOL_CALL_START,
+        parentMessageId: "assistant-partial-1",
+        toolCallId: "tool-partial-1",
+        toolCallName: "search_web",
+      },
+      { type: EventType.TOOL_CALL_ARGS, toolCallId: "tool-partial-1", delta: '{"query":"rea' },
+    ]);
+
+    const thread = getThread(threadId);
+
+    expect(thread?.messages).toHaveLength(1);
+    expect(thread?.messages[0]).toMatchObject({
+      id: "assistant-partial-1",
+      role: "assistant",
+      toolCalls: [
+        {
+          id: "tool-partial-1",
+          type: "function",
+          function: {
+            name: "search_web",
+            arguments: '{"query":"rea',
+          },
+        },
+      ],
+    });
+    expect(
+      thread?.traceEvents.some(
+        (event) =>
+          event.type === EventType.TOOL_CALL_ARGS &&
+          event.toolCallId === "tool-partial-1",
+      ),
+    ).toBe(true);
+  });
+
+  it("persists streaming tool result chunks before the final tool result arrives", () => {
+    const threadId = `thread-${crypto.randomUUID()}`;
+
+    persistHistory(threadId, [], [
+      { type: EventType.RUN_STARTED, threadId, runId: "run-partial-result-1" },
+      {
+        type: EventType.CUSTOM,
+        name: TOOL_RESULT_START_EVENT,
+        value: {
+          messageId: "tool-result-stream-1",
+          toolCallId: "tool-stream-1",
+          stepId: "step-writer-1",
+          parentStepId: "step-supervisor-1",
+          stepKind: "subagent",
+          stepName: "writer",
+          parentStepName: "supervisor",
+        },
+      },
+      {
+        type: EventType.CUSTOM,
+        name: TOOL_RESULT_DELTA_EVENT,
+        value: {
+          messageId: "tool-result-stream-1",
+          toolCallId: "tool-stream-1",
+          delta: '{"draft":"hel',
+        },
+      },
+      {
+        type: EventType.CUSTOM,
+        name: TOOL_RESULT_END_EVENT,
+        value: {
+          messageId: "tool-result-stream-1",
+          toolCallId: "tool-stream-1",
+        },
+      },
+    ]);
+
+    const thread = getThread(threadId);
+
+    expect(thread?.messages).toEqual([
+      expect.objectContaining({
+        id: "tool-result-stream-1",
+        role: "tool",
+        toolCallId: "tool-stream-1",
+        content: '{"draft":"hel',
+        stepId: "step-writer-1",
+        parentStepId: "step-supervisor-1",
+        stepKind: "subagent",
+        stepName: "writer",
+        parentStepName: "supervisor",
+      }),
+    ]);
+    expect(
+      thread?.traceEvents.some(
+        (event) =>
+          event.type === EventType.CUSTOM && event.name === TOOL_RESULT_DELTA_EVENT,
+      ),
+    ).toBe(true);
+  });
+
+  it("persists step ids and trace events for sub-agent runs", () => {
+    const threadId = `thread-${crypto.randomUUID()}`;
+
+    persistHistory(threadId, [], [
+      { type: EventType.RUN_STARTED, threadId, runId: "run-trace-1" },
+      {
+        type: EventType.STEP_STARTED,
+        stepId: "step-supervisor-1",
+        stepKind: "supervisor",
+        stepName: "supervisor",
+      },
+      {
+        type: EventType.STEP_STARTED,
+        stepId: "step-writer-1",
+        parentStepId: "step-supervisor-1",
+        stepKind: "subagent",
+        stepName: "writer",
+        parentStepName: "supervisor",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "assistant-writer-1",
+        role: "assistant",
+        stepId: "step-writer-1",
+        parentStepId: "step-supervisor-1",
+        stepKind: "subagent",
+        stepName: "writer",
+        parentStepName: "supervisor",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-writer-1",
+        delta: "Result",
+        stepId: "step-writer-1",
+        parentStepId: "step-supervisor-1",
+        stepKind: "subagent",
+        stepName: "writer",
+        parentStepName: "supervisor",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: "assistant-writer-1",
+        stepId: "step-writer-1",
+        parentStepId: "step-supervisor-1",
+        stepKind: "subagent",
+        stepName: "writer",
+        parentStepName: "supervisor",
+      },
+      {
+        type: EventType.STEP_FINISHED,
+        stepId: "step-writer-1",
+        parentStepId: "step-supervisor-1",
+        stepKind: "subagent",
+        stepName: "writer",
+        parentStepName: "supervisor",
+      },
+      { type: EventType.RUN_FINISHED, threadId, runId: "run-trace-1" },
+    ]);
+
+    const thread = getThread(threadId);
+    expect(thread?.messages[0]).toMatchObject({
+      id: "assistant-writer-1",
+      role: "assistant",
+      content: "Result",
+      stepId: "step-writer-1",
+      parentStepId: "step-supervisor-1",
+      stepKind: "subagent",
+      stepName: "writer",
+      parentStepName: "supervisor",
+    });
+    expect(thread?.traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: EventType.STEP_STARTED,
+          stepId: "step-supervisor-1",
+          stepKind: "supervisor",
+          runId: "run-trace-1",
+        }),
+        expect.objectContaining({
+          type: EventType.STEP_STARTED,
+          stepId: "step-writer-1",
+          parentStepId: "step-supervisor-1",
+          stepKind: "subagent",
+          stepName: "writer",
+        }),
+      ]),
+    );
+  });
+
+  it("persists canonical ag-ui.trace custom events", () => {
+    const threadId = `thread-${crypto.randomUUID()}`;
+
+    persistHistory(threadId, [], [
+      { type: EventType.RUN_STARTED, threadId, runId: "run-trace-v1" },
+      {
+        type: EventType.CUSTOM,
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 1,
+          type: "span.start",
+          spanId: "span-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentSpanId: "span-supervisor-1",
+        },
+      },
+      { type: EventType.RUN_FINISHED, threadId, runId: "run-trace-v1" },
+    ]);
+
+    expect(threadId).toBeTruthy();
+    expect(getThread(threadId)?.traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: EventType.CUSTOM,
+          name: AG_UI_TRACE_EVENT_NAME,
+          runId: "run-trace-v1",
+          value: expect.objectContaining({
+            type: "span.start",
+            spanId: "span-writer-1",
+          }),
+        }),
+      ]),
+    );
   });
 });

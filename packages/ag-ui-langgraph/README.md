@@ -34,7 +34,7 @@ class LangGraphAgent {
 
 interface LangGraphAgentConfig {
   name: string;
-  graph: CompiledStateGraph<any, any, any>;
+  graph: LocalCompiledGraph;
   description?: string;
   config?: Record<string, unknown>;
 }
@@ -43,7 +43,9 @@ interface LangGraphAgentConfig {
 Convenience factories are also exported:
 
 - `createReactAgent(config)` builds a LangGraph prebuilt React agent and wraps it.
-- `createSupervisor(config)` is currently a compatibility helper over a React agent graph; callers needing a real supervisor topology should build and pass their compiled graph directly.
+- `createSupervisor(config)` builds a real
+  `@langchain/langgraph-supervisor` topology from named sub-agents, compiles it,
+  and wraps it.
 
 ## Event Translation
 
@@ -58,6 +60,30 @@ Convenience factories are also exported:
 | node metadata changes | `STEP_STARTED`, `STEP_FINISHED` |
 | reasoning content blocks | `REASONING_*` events |
 | every LangGraph event | `RAW` event with JSON-safe payload |
+
+## Canonical Trace Events
+
+Sub-agent hierarchy is emitted as standard AG-UI custom events:
+
+```ts
+{
+  type: "CUSTOM",
+  name: "ag-ui.trace",
+  value: {
+    version: 1,
+    type: "span.start",
+    spanId: "run-1:writer:1",
+    name: "writer",
+    kind: "subagent",
+    parentSpanId: "run-1:supervisor:1"
+  }
+}
+```
+
+Trace payload types are `span.start`, `span.end`, `message.link`, and
+`tool.link`. Normal AG-UI `TEXT_MESSAGE_*`, `TOOL_CALL_*`, and `STEP_*` events
+remain protocol-compatible; clients should use `CUSTOM name="ag-ui.trace"` as
+the canonical source for parent-child trace rendering.
 
 ## Python Alignment Notes
 
@@ -78,3 +104,18 @@ pnpm --filter ag-ui-langgraph run typecheck
 The package test suite covers conversion utilities, reasoning extraction,
 JSON-safe serialization, schema filtering, checkpoint/interrupt behavior, state
 merge behavior, and LangGraph event translation.
+
+## Publishing
+
+The npm package is emitted from `dist`:
+
+```bash
+pnpm --filter ag-ui-langgraph run typecheck
+pnpm --filter ag-ui-langgraph run test
+pnpm --filter ag-ui-langgraph run build
+pnpm --filter ag-ui-langgraph run publish:check-name
+pnpm --filter ag-ui-langgraph run publish:dry
+```
+
+`publish:dry` runs `npm pack --dry-run`; the real publish step is intentionally
+left to the package owner.

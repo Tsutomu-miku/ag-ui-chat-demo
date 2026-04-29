@@ -1,22 +1,9 @@
 import { EventType, type BaseEvent } from "@ag-ui/core";
 
+import type { InterruptLike, RunnableConfigLike } from "../types.js";
 import { makeJsonSafe } from "./convert.js";
 
 export const ROOT_SUBGRAPH_NAME = "root";
-
-/**
- * LangChain chunks are class instances in real runs and plain objects in tests.
- * Keep access in one place so event handlers can stay focused on protocol logic.
- */
-export function chunkGet(
-  chunk: any,
-  key: string,
-  defaultValue: any = undefined,
-): any {
-  if (chunk == null) return defaultValue;
-  if (typeof chunk === "object" && key in chunk) return chunk[key];
-  return defaultValue;
-}
 
 export function dumpJsonSafe(value: unknown): unknown {
   try {
@@ -31,7 +18,10 @@ export function dumpJsonSafe(value: unknown): unknown {
  * and LangGraph runtime objects into JSON-safe shapes before encoder validation.
  */
 export function sanitizeRawPayloads(event: BaseEvent): BaseEvent {
-  const mutable = event as any;
+  const mutable = event as BaseEvent & {
+    event?: unknown;
+    rawEvent?: unknown;
+  };
   if (mutable.type === EventType.RAW && "event" in mutable) {
     mutable.event = dumpJsonSafe(mutable.event);
   }
@@ -41,9 +31,11 @@ export function sanitizeRawPayloads(event: BaseEvent): BaseEvent {
   return event;
 }
 
-export function collectInterrupts(tasks: any[] | null): any[] {
+export function collectInterrupts(
+  tasks: Array<{ interrupts?: InterruptLike[] | null }> | null,
+): InterruptLike[] {
   if (!tasks || tasks.length === 0) return [];
-  const interrupts: any[] = [];
+  const interrupts: InterruptLike[] = [];
   for (const task of tasks) {
     interrupts.push(...(task?.interrupts ?? []));
   }
@@ -60,13 +52,13 @@ export function parseResumeInput(value: unknown): unknown {
 }
 
 export function getStreamArgs(opts: {
-  input: any;
-  config?: Record<string, any>;
+  input: unknown;
+  config?: RunnableConfigLike;
   subgraphs?: boolean;
   version?: "v1" | "v2";
-  context?: Record<string, any>;
-}): { input: any; options: Record<string, any> } {
-  const options: Record<string, any> = {
+  context?: Record<string, unknown>;
+}): { input: unknown; options: RunnableConfigLike } {
+  const options: RunnableConfigLike = {
     ...(opts.config ?? {}),
     version: opts.version ?? "v2",
     subgraphs: opts.subgraphs ?? false,
@@ -74,8 +66,7 @@ export function getStreamArgs(opts: {
 
   if (opts.context && Object.keys(opts.context).length > 0) {
     options.context = {
-      ...((opts.config?.configurable as Record<string, any> | undefined) ??
-        {}),
+      ...(opts.config?.configurable ?? {}),
       ...opts.context,
     };
   }

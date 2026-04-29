@@ -1,11 +1,15 @@
 import type { BaseEvent, RunAgentInput } from "@ag-ui/core";
-import { LangGraphAgent } from "ag-ui-langgraph";
+import {
+  LangGraphAgent,
+  type LocalCompiledGraph,
+} from "ag-ui-langgraph";
 
 import { ProtocolDemoGraph } from "./graph.js";
 
 const protocolAgent = new LangGraphAgent({
   name: "protocol-demo",
-  graph: new ProtocolDemoGraph() as any,
+  graph: new ProtocolDemoGraph() as unknown as LocalCompiledGraph,
+  subAgents: ["writer"],
 });
 
 export async function* runProtocolDemoAgent(

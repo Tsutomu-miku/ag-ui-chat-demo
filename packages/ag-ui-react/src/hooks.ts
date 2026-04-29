@@ -17,10 +17,18 @@ import type {
   PendingToolCall,
   ThreadAgentEvent,
 } from "./types.js";
+import { AG_UI_TRACE_EVENT_NAME } from "./types.js";
+
+const TOOL_RESULT_START_EVENT = "ag-ui.tool_result_start";
+const TOOL_RESULT_DELTA_EVENT = "ag-ui.tool_result_delta";
+const TOOL_RESULT_END_EVENT = "ag-ui.tool_result_end";
 
 // ── Event metadata helper ──
 
 type EventStepMetadata = Partial<{
+  stepId: string;
+  parentStepId: string;
+  stepKind: string;
   stepName: string;
   parentStepName: string;
 }>;
@@ -28,8 +36,36 @@ type EventStepMetadata = Partial<{
 function getEventStepMetadata(event: unknown): EventStepMetadata {
   const item = event as EventStepMetadata;
   return {
+    ...(item.stepId ? { stepId: item.stepId } : {}),
+    ...(item.parentStepId ? { parentStepId: item.parentStepId } : {}),
+    ...(item.stepKind ? { stepKind: item.stepKind } : {}),
     ...(item.stepName ? { stepName: item.stepName } : {}),
     ...(item.parentStepName ? { parentStepName: item.parentStepName } : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getToolResultEventPayload(
+  event: unknown,
+): (EventStepMetadata & {
+  messageId?: string;
+  toolCallId?: string;
+  delta?: string;
+}) | null {
+  if (!isRecord(event)) return null;
+  const value = isRecord(event.value) ? event.value : null;
+  if (!value) return null;
+
+  return {
+    ...(typeof value.messageId === "string" ? { messageId: value.messageId } : {}),
+    ...(typeof value.toolCallId === "string"
+      ? { toolCallId: value.toolCallId }
+      : {}),
+    ...(typeof value.delta === "string" ? { delta: value.delta } : {}),
+    ...getEventStepMetadata(value),
   };
 }
 
@@ -142,6 +178,7 @@ export function useAgentChat({
 
       const pendingFrontend: PendingToolCall[] = [];
       let activeAssistantMessageId: string | null = null;
+      const toolStepMetadata = new Map<string, EventStepMetadata>();
 
       agent.threadId = threadId;
       agent.messages = messages.map((m) => ({
@@ -149,6 +186,12 @@ export function useAgentChat({
         role: m.role,
         content: m.content,
         ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+        ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
+        ...(m.stepId ? { stepId: m.stepId } : {}),
+        ...(m.parentStepId ? { parentStepId: m.parentStepId } : {}),
+        ...(m.stepKind ? { stepKind: m.stepKind } : {}),
+        ...(m.stepName ? { stepName: m.stepName } : {}),
+        ...(m.parentStepName ? { parentStepName: m.parentStepName } : {}),
       })) as never[];
 
       const subscriber: AgentSubscriber = {
@@ -181,13 +224,16 @@ export function useAgentChat({
             event.parentMessageId ||
             activeAssistantMessageId ||
             event.toolCallId;
+          const metadata = getEventStepMetadata(event);
+
+          toolStepMetadata.set(event.toolCallId, metadata);
 
           emitThreadEvent(threadId, {
             type: "tool_start",
             parentMessageId,
             toolCallId: event.toolCallId,
             toolCallName: event.toolCallName,
-            ...getEventStepMetadata(event),
+            ...metadata,
           });
         },
 
@@ -206,12 +252,16 @@ export function useAgentChat({
           });
 
           if (frontendToolNames.has(toolCallName)) {
+            const metadata = {
+              ...(toolStepMetadata.get(event.toolCallId) ?? {}),
+              ...getEventStepMetadata(event),
+            };
             const pendingToolCall = {
               toolCallId: event.toolCallId,
               toolCallName,
               args: toolCallArgs,
               status: "pending",
-              ...getEventStepMetadata(event),
+              ...metadata,
             } satisfies PendingToolCall;
             pendingFrontend.push(pendingToolCall);
             // 前端工具一旦参数流结束，就立刻展示交互卡片；
@@ -226,6 +276,7 @@ export function useAgentChat({
         },
 
         onToolCallResultEvent: ({ event }) => {
+          toolStepMetadata.delete(event.toolCallId);
           emitThreadEvent(threadId, {
             type: "append_message",
             message: {
@@ -240,11 +291,11 @@ export function useAgentChat({
         },
 
         onStepStartedEvent: ({ event }) => {
-          const { parentStepName } = getEventStepMetadata(event);
+          const metadata = getEventStepMetadata(event);
           emitThreadEvent(threadId, {
             type: "step_started",
             stepName: event.stepName,
-            ...(parentStepName ? { parentStepName } : {}),
+            ...metadata,
           });
         },
 
@@ -288,11 +339,59 @@ export function useAgentChat({
         },
 
         onStepFinishedEvent: ({ event }) => {
-          const { parentStepName } = getEventStepMetadata(event);
+          const metadata = getEventStepMetadata(event);
           emitThreadEvent(threadId, {
             type: "step_finished",
             stepName: event.stepName,
-            ...(parentStepName ? { parentStepName } : {}),
+            ...metadata,
+          });
+        },
+
+        onCustomEvent: ({ event }) => {
+          if (event.name === TOOL_RESULT_START_EVENT) {
+            const payload = getToolResultEventPayload(event);
+            if (!payload?.messageId || !payload.toolCallId) return;
+            emitThreadEvent(threadId, {
+              type: "tool_result_start",
+              messageId: payload.messageId,
+              toolCallId: payload.toolCallId,
+              stepId: payload.stepId,
+              parentStepId: payload.parentStepId,
+              stepKind: payload.stepKind,
+              stepName: payload.stepName,
+              parentStepName: payload.parentStepName,
+            });
+            return;
+          }
+
+          if (event.name === TOOL_RESULT_DELTA_EVENT) {
+            const payload = getToolResultEventPayload(event);
+            if (!payload?.messageId || !payload.toolCallId || !payload.delta) return;
+            emitThreadEvent(threadId, {
+              type: "tool_result_delta",
+              messageId: payload.messageId,
+              toolCallId: payload.toolCallId,
+              delta: payload.delta,
+            });
+            return;
+          }
+
+          if (event.name === TOOL_RESULT_END_EVENT) {
+            const payload = getToolResultEventPayload(event);
+            if (!payload?.messageId || !payload.toolCallId) return;
+            emitThreadEvent(threadId, {
+              type: "tool_result_end",
+              messageId: payload.messageId,
+              toolCallId: payload.toolCallId,
+            });
+            return;
+          }
+
+          if (event.name !== AG_UI_TRACE_EVENT_NAME) return;
+          emitThreadEvent(threadId, {
+            type: "trace_event",
+            name: event.name,
+            value: event.value,
           });
         },
 
@@ -346,11 +445,28 @@ export function useAgentChat({
       const ctx = runContextRef.current;
       if (!ctx) return;
 
+      const pending = pendingToolCalls.find(
+        (item) => item.toolCallId === toolCallId,
+      );
+      const metadata = pending
+        ? {
+            ...(pending.stepId ? { stepId: pending.stepId } : {}),
+            ...(pending.parentStepId
+              ? { parentStepId: pending.parentStepId }
+              : {}),
+            ...(pending.stepKind ? { stepKind: pending.stepKind } : {}),
+            ...(pending.stepName ? { stepName: pending.stepName } : {}),
+            ...(pending.parentStepName
+              ? { parentStepName: pending.parentStepName }
+              : {}),
+          }
+        : {};
       const toolResultMessage: ChatMessage = {
         id: generateId(),
         role: "tool",
         content: result,
         toolCallId,
+        ...metadata,
         createdAt: new Date().toISOString(),
       };
 
@@ -380,7 +496,7 @@ export function useAgentChat({
         nextRunInput,
       );
     },
-    [sendMessage, generateId],
+    [sendMessage, generateId, pendingToolCalls],
   );
 
   const stopStreaming = useCallback(() => {

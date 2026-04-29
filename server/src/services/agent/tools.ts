@@ -1,4 +1,7 @@
-import { tool } from "@langchain/core/tools";
+import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
+import { tool, type ToolRunnableConfig } from "@langchain/core/tools";
+import { Command, getCurrentTaskInput } from "@langchain/langgraph";
+import { v4 as uuid } from "uuid";
 import { z } from "zod";
 
 const PRECEDENCE = new Map([
@@ -135,6 +138,54 @@ function evaluateMathExpression(expression: string): number {
   return values[0];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function currentTaskMessages(): BaseMessage[] {
+  const state = getCurrentTaskInput();
+  if (!isRecord(state) || !Array.isArray(state.messages)) return [];
+  return state.messages as BaseMessage[];
+}
+
+function createTransferTool(targetAgent: "researcher" | "writer") {
+  const name = `transfer_to_${targetAgent}`;
+
+  return tool(
+    async (
+      _input: {
+        input: string;
+      },
+      config?: ToolRunnableConfig,
+    ) => {
+      const toolMessage = new ToolMessage({
+        content: `Successfully transferred to ${targetAgent}`,
+        name,
+        tool_call_id: config?.toolCall?.id ?? uuid(),
+      });
+
+      return new Command({
+        goto: targetAgent,
+        graph: Command.PARENT,
+        update: {
+          messages: [...currentTaskMessages(), toolMessage],
+        },
+      });
+    },
+    {
+      name,
+      description: `Transfer control to the ${targetAgent} agent.`,
+      schema: z.object({
+        input: z
+          .string()
+          .describe(
+            `The exact task or instructions that the ${targetAgent} should complete.`,
+          ),
+      }),
+    },
+  );
+}
+
 export const getWeather = tool(
   async ({ city }: { city: string }) => {
     const conditions = ["Sunny", "Cloudy", "Rainy", "Partly Cloudy", "Windy"];
@@ -209,6 +260,98 @@ export const calculate = tool(
   }
 );
 
+export const composeText = tool(
+  async ({
+    content,
+    instructions,
+  }: {
+    content: string;
+    instructions?: string;
+  }) => {
+    const normalized = content.trim().replace(/\s+/g, " ");
+    const wantsShortSentence =
+      instructions?.toLowerCase().includes("short sentence") ?? false;
+
+    return JSON.stringify({
+      content,
+      instructions: instructions ?? null,
+      draft: wantsShortSentence
+        ? normalized.replace(/[.!?]*$/, ".")
+        : normalized,
+    });
+  },
+  {
+    name: "compose_text",
+    description:
+      "Compose or polish text from source content and writing instructions.",
+    schema: z.object({
+      content: z.string().describe("Source content to rewrite or summarize"),
+      instructions: z
+        .string()
+        .optional()
+        .describe("Writing instructions, tone, or format requirements"),
+    }),
+  }
+);
+
+export const summarizeText = tool(
+  async ({
+    text,
+    sentenceCount,
+  }: {
+    text: string;
+    sentenceCount?: number;
+  }) => {
+    const normalized = text.trim().replace(/\s+/g, " ");
+    const sentences = normalized
+      .split(/(?<=[.!?])\s+/)
+      .filter(Boolean)
+      .slice(0, Math.max(1, sentenceCount ?? 1));
+
+    return JSON.stringify({
+      text,
+      sentenceCount: sentenceCount ?? 1,
+      summary: (sentences[0] ?? normalized).replace(/[.!?]*$/, "."),
+    });
+  },
+  {
+    name: "summarize_text",
+    description: "Summarize source text into one or more short sentences.",
+    schema: z.object({
+      text: z.string().describe("Source text to summarize"),
+      sentenceCount: z
+        .number()
+        .optional()
+        .describe("Desired number of sentences"),
+    }),
+  }
+);
+
+export const writeText = tool(
+  async ({
+    content,
+    format,
+  }: {
+    content: string;
+    format?: string;
+  }) => {
+    const draft = content.trim().replace(/\s+/g, " ");
+    return JSON.stringify({
+      content,
+      format: format ?? "plain",
+      draft,
+    });
+  },
+  {
+    name: "write_text",
+    description: "Write or reformat content into the requested format.",
+    schema: z.object({
+      content: z.string().describe("Source content to write from"),
+      format: z.string().optional().describe("Requested output format"),
+    }),
+  }
+);
+
 export const getCurrentTime = tool(
   async () => {
     const now = new Date();
@@ -230,4 +373,65 @@ export const getCurrentTime = tool(
   }
 );
 
-export const backendTools = [getWeather, searchWeb, calculate, getCurrentTime];
+export const confirmAction = tool(
+  async ({ action, details }: { action: string; details?: string }) => {
+    return JSON.stringify({
+      status: "pending_frontend_confirmation",
+      action,
+      details: details ?? null,
+    });
+  },
+  {
+    name: "confirm_action",
+    description:
+      "Ask the user to confirm an important action in the frontend before continuing.",
+    schema: z.object({
+      action: z.string().describe("The action that requires confirmation"),
+      details: z
+        .string()
+        .optional()
+        .describe("Optional context shown to the user"),
+    }),
+  }
+);
+
+export const collectUserInput = tool(
+  async ({
+    prompt,
+    fieldName,
+  }: {
+    prompt: string;
+    fieldName?: string;
+  }) => {
+    return JSON.stringify({
+      status: "pending_frontend_input",
+      prompt,
+      fieldName: fieldName ?? "response",
+    });
+  },
+  {
+    name: "collect_user_input",
+    description:
+      "Ask the frontend to collect a short piece of user input before continuing.",
+    schema: z.object({
+      prompt: z.string().describe("The question or prompt shown to the user"),
+      fieldName: z
+        .string()
+        .optional()
+        .describe("Optional field name for the collected answer"),
+    }),
+  }
+);
+
+export const backendTools = [
+  getWeather,
+  searchWeb,
+  calculate,
+  composeText,
+  summarizeText,
+  writeText,
+  getCurrentTime,
+];
+export const frontendInteractionTools = [confirmAction, collectUserInput];
+export const transferToResearcher = createTransferTool("researcher");
+export const transferToWriter = createTransferTool("writer");

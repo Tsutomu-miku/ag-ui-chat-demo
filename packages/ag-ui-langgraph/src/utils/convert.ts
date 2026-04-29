@@ -12,7 +12,6 @@ import {
   SystemMessage,
   ToolMessage,
   type BaseMessage,
-  type MessageContent,
 } from "@langchain/core/messages";
 import type { BindToolsInput } from "@langchain/core/language_models/chat_models";
 
@@ -44,9 +43,7 @@ export function stringifyIfNeeded(item: unknown): string {
  * - string content
  * - Array<{type, text, ...}> multimodal blocks
  */
-export function contentToString(
-  content: Message["content"] | MessageContent | undefined,
-): string {
+export function contentToString(content: unknown): string {
   if (!content) return "";
   if (typeof content === "string") return content;
 

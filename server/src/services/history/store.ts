@@ -6,6 +6,9 @@ export type StoredRole = "user" | "assistant" | "tool";
 
 export type StoredToolCall = ToolCall &
   Partial<{
+    stepId: string;
+    parentStepId: string;
+    stepKind: string;
     stepName: string;
     parentStepName: string;
   }>;
@@ -16,15 +19,40 @@ export interface StoredMessage {
   content: string;
   toolCallId?: string;
   toolCalls?: StoredToolCall[];
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
   stepName?: string;
   parentStepName?: string;
   createdAt: string;
+}
+
+export interface StoredTraceEvent {
+  type: string;
+  sequence: number;
+  createdAt: string;
+  runId?: string;
+  name?: string;
+  value?: unknown;
+  messageId?: string;
+  parentMessageId?: string;
+  role?: string;
+  delta?: string;
+  content?: string;
+  toolCallId?: string;
+  toolCallName?: string;
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
+  stepName?: string;
+  parentStepName?: string;
 }
 
 export interface ChatThread {
   id: string;
   title: string;
   messages: StoredMessage[];
+  traceEvents: StoredTraceEvent[];
   createdAt: string;
   updatedAt: string;
 }
@@ -47,6 +75,7 @@ export function getOrCreateThread(threadId: string): ChatThread {
     id: threadId,
     title: "New Chat",
     messages: [],
+    traceEvents: [],
     createdAt: now(),
     updatedAt: now(),
   };
@@ -75,6 +104,24 @@ export function appendMessages(threadId: string, messages: StoredMessage[]): Cha
     threadId,
     appendedCount: messages.length,
     totalCount: thread.messages.length,
+  });
+
+  return thread;
+}
+
+export function appendTraceEvents(
+  threadId: string,
+  traceEvents: StoredTraceEvent[],
+): ChatThread {
+  const thread = getOrCreateThread(threadId);
+
+  thread.traceEvents.push(...traceEvents);
+  thread.updatedAt = now();
+
+  logger.debug("trace events appended", {
+    threadId,
+    appendedCount: traceEvents.length,
+    totalCount: thread.traceEvents.length,
   });
 
   return thread;

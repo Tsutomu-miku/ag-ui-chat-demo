@@ -42,6 +42,7 @@ export {
   createReactAgent,
   createSupervisor,
 } from "./factory.js";
+export { createProtocolTracePlugin } from "./plugins/trace.js";
 
 export type {
   LangGraphAgentConfig,
@@ -51,7 +52,12 @@ export type {
   ReactAgentConfig,
   SubAgentDefinition,
   SupervisorConfig,
+  SupervisorOutputMode,
 } from "./factory.js";
+export type {
+  LangGraphPlugin,
+  LangGraphPluginContext,
+} from "./plugins/trace.js";
 
 // ── Types (aligned with Python types.py) ──
 export type {
@@ -65,6 +71,11 @@ export type {
   RunMetadata,
   MessagesInProgressRecord,
   ToolCall,
+  JsonPrimitive,
+  JsonValue,
+  JsonObject,
+  RunnableConfigLike,
+  LocalCompiledGraph,
   BaseLangGraphPlatformMessage,
   LangGraphPlatformResultMessage,
   LangGraphPlatformActionExecutionMessage,
@@ -72,6 +83,13 @@ export type {
   PredictStateTool,
   PreparedStream,
   ForwardedProps,
+  LangGraphStreamEvent,
+  ToolCallChunk,
+  InterruptLike,
+  CheckpointTaskLike,
+  CheckpointSnapshotLike,
+  GraphWithCheckpointing,
+  TraceStepKind,
 } from "./types.js";
 
 export {
@@ -79,6 +97,19 @@ export {
   CustomEventNames,
   DEFAULT_SCHEMA_KEYS,
 } from "./types.js";
+
+export {
+  AG_UI_TRACE_EVENT_NAME,
+  AG_UI_TRACE_PROTOCOL_VERSION,
+  createTraceCustomEvent,
+} from "./trace.js";
+
+export type {
+  AgUiTraceCustomEvent,
+  AgUiTraceCustomValue,
+  AgUiTraceEvent,
+  AgUiTraceSource,
+} from "./trace.js";
 
 // ── Message conversion (aligned with Python utils.py) ──
 export {

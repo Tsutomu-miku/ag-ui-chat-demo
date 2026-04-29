@@ -8,10 +8,12 @@
  */
 
 import { useState, useCallback, useEffect } from "react";
+import { flushSync } from "react-dom";
 import type {
   ActiveStep,
   ChatMessage,
   ChatThread,
+  TraceEvent,
   ThreadAgentEvent,
   ThreadSummary,
 } from "./types.js";
@@ -19,6 +21,182 @@ import { updateMessagesWithAgentEvent } from "./reducer.js";
 
 function now() {
   return new Date().toISOString();
+}
+
+function shouldFlushStreamingEvent(event: ThreadAgentEvent) {
+  return (
+    event.type === "assistant_start" ||
+    event.type === "assistant_delta" ||
+    event.type === "assistant_end" ||
+    event.type === "tool_start" ||
+    event.type === "tool_args" ||
+    event.type === "tool_end" ||
+    event.type === "tool_result_start" ||
+    event.type === "tool_result_delta" ||
+    event.type === "tool_result_end" ||
+    event.type === "trace_event"
+  );
+}
+
+function toTraceEvent(
+  event: ThreadAgentEvent,
+  sequence: number,
+): TraceEvent | null {
+  const base = {
+    sequence,
+    createdAt: now(),
+  };
+
+  switch (event.type) {
+    case "assistant_start":
+      return {
+        ...base,
+        type: "TEXT_MESSAGE_START",
+        messageId: event.messageId,
+        role: "assistant",
+        stepId: event.stepId,
+        parentStepId: event.parentStepId,
+        stepKind: event.stepKind,
+        stepName: event.stepName,
+        parentStepName: event.parentStepName,
+      };
+    case "assistant_delta":
+      return {
+        ...base,
+        type: "TEXT_MESSAGE_CONTENT",
+        messageId: event.messageId,
+        delta: event.delta,
+      };
+    case "assistant_end":
+      return {
+        ...base,
+        type: "TEXT_MESSAGE_END",
+        messageId: event.messageId,
+      };
+    case "tool_start":
+      return {
+        ...base,
+        type: "TOOL_CALL_START",
+        parentMessageId: event.parentMessageId,
+        toolCallId: event.toolCallId,
+        toolCallName: event.toolCallName,
+        stepId: event.stepId,
+        parentStepId: event.parentStepId,
+        stepKind: event.stepKind,
+        stepName: event.stepName,
+        parentStepName: event.parentStepName,
+      };
+    case "tool_args":
+      return {
+        ...base,
+        type: "TOOL_CALL_ARGS",
+        toolCallId: event.toolCallId,
+        delta: event.delta,
+      };
+    case "tool_end":
+      return {
+        ...base,
+        type: "TOOL_CALL_END",
+        toolCallId: event.toolCallId,
+      };
+    case "tool_result_start":
+      return {
+        ...base,
+        type: "TOOL_CALL_RESULT_START",
+        messageId: event.messageId,
+        toolCallId: event.toolCallId,
+        stepId: event.stepId,
+        parentStepId: event.parentStepId,
+        stepKind: event.stepKind,
+        stepName: event.stepName,
+        parentStepName: event.parentStepName,
+      };
+    case "tool_result_delta":
+      return {
+        ...base,
+        type: "TOOL_CALL_RESULT_CHUNK",
+        messageId: event.messageId,
+        toolCallId: event.toolCallId,
+        delta: event.delta,
+      };
+    case "tool_result_end":
+      return {
+        ...base,
+        type: "TOOL_CALL_RESULT_END",
+        messageId: event.messageId,
+        toolCallId: event.toolCallId,
+      };
+    case "step_started":
+      return {
+        ...base,
+        type: "STEP_STARTED",
+        stepId: event.stepId,
+        parentStepId: event.parentStepId,
+        stepKind: event.stepKind,
+        stepName: event.stepName,
+        parentStepName: event.parentStepName,
+      };
+    case "step_finished":
+      return {
+        ...base,
+        type: "STEP_FINISHED",
+        stepId: event.stepId,
+        parentStepId: event.parentStepId,
+        stepKind: event.stepKind,
+        stepName: event.stepName,
+        parentStepName: event.parentStepName,
+      };
+    case "reasoning_start":
+      return {
+        ...base,
+        type: "REASONING_START",
+        messageId: event.messageId,
+        stepId: event.stepId,
+        parentStepId: event.parentStepId,
+        stepKind: event.stepKind,
+        stepName: event.stepName,
+        parentStepName: event.parentStepName,
+      };
+    case "reasoning_delta":
+      return {
+        ...base,
+        type: "REASONING_MESSAGE_CONTENT",
+        messageId: event.messageId,
+        delta: event.delta,
+      };
+    case "reasoning_end":
+      return {
+        ...base,
+        type: "REASONING_END",
+        messageId: event.messageId,
+      };
+    case "append_message":
+      if (event.message.role !== "tool") return null;
+      return {
+        ...base,
+        type: "TOOL_CALL_RESULT",
+        messageId: event.message.id,
+        content: event.message.content,
+        toolCallId: event.message.toolCallId,
+        stepId: event.message.stepId,
+        parentStepId: event.message.parentStepId,
+        stepKind: event.message.stepKind,
+        stepName: event.message.stepName,
+        parentStepName: event.message.parentStepName,
+      };
+    case "run_complete":
+      return {
+        ...base,
+        type: "RUN_FINISHED",
+      };
+    case "trace_event":
+      return {
+        ...base,
+        type: "CUSTOM",
+        name: event.name,
+        value: event.value,
+      };
+  }
 }
 
 async function parseJsonResponse<T>(res: Response): Promise<T | null> {
@@ -105,7 +283,9 @@ export function useThreads({
 
       return fetch(url, {
         ...(init || {}),
-        ...(headers ? { headers: { ...(init?.headers || {}), ...headers } } : {}),
+        ...(headers
+          ? { headers: { ...(init?.headers || {}), ...headers } }
+          : {}),
       });
     },
     [headers],
@@ -171,6 +351,7 @@ export function useThreads({
       id: generateId(),
       title: "New Chat",
       messages: [],
+      traceEvents: [],
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -187,34 +368,66 @@ export function useThreads({
 
   const handleThreadEvent = useCallback(
     (threadId: string, event: ThreadAgentEvent) => {
-      // Handle step events via dedicated state
-      if (event.type === "step_started") {
-        setActiveSteps((prev) => [
-          ...prev,
-          {
-            stepName: event.stepName,
-            parentStepName: event.parentStepName,
-            startedAt: now(),
-          },
-        ]);
-      } else if (event.type === "step_finished") {
-        setActiveSteps((prev) =>
-          prev.filter((s) => s.stepName !== event.stepName),
-        );
-      } else if (event.type === "run_complete") {
-        setActiveSteps([]);
+      const applyEvent = () => {
+        // Handle step events via dedicated state
+        if (event.type === "step_started") {
+          setActiveSteps((prev) => {
+            const alreadyTracked = prev.some(
+              (step) =>
+                step.stepId === event.stepId ||
+                (!event.stepId &&
+                  step.stepName === event.stepName &&
+                  step.parentStepName === event.parentStepName),
+            );
+            if (alreadyTracked) return prev;
+
+            return [
+              ...prev,
+              {
+                stepId: event.stepId,
+                parentStepId: event.parentStepId,
+                stepKind: event.stepKind,
+                stepName: event.stepName,
+                parentStepName: event.parentStepName,
+                startedAt: now(),
+              },
+            ];
+          });
+        } else if (event.type === "step_finished") {
+          setActiveSteps((prev) =>
+            prev.filter((s) =>
+              event.stepId
+                ? s.stepId !== event.stepId
+                : s.stepName !== event.stepName,
+            ),
+          );
+        } else if (event.type === "run_complete") {
+          setActiveSteps([]);
+        }
+
+        // Update messages via the pure reducer
+        updateActiveThread((thread) => {
+          if (thread.id !== threadId) return thread;
+
+          return {
+            ...thread,
+            messages: updateMessagesWithAgentEvent(thread.messages, event),
+            traceEvents: (() => {
+              const existing = thread.traceEvents ?? [];
+              const traceEvent = toTraceEvent(event, existing.length);
+              return traceEvent ? [...existing, traceEvent] : existing;
+            })(),
+            updatedAt: now(),
+          };
+        });
+      };
+
+      if (shouldFlushStreamingEvent(event)) {
+        flushSync(applyEvent);
+        return;
       }
 
-      // Update messages via the pure reducer
-      updateActiveThread((thread) => {
-        if (thread.id !== threadId) return thread;
-
-        return {
-          ...thread,
-          messages: updateMessagesWithAgentEvent(thread.messages, event),
-          updatedAt: now(),
-        };
-      });
+      applyEvent();
     },
     [updateActiveThread],
   );
@@ -232,11 +445,24 @@ export function useThreads({
 
   const appendToolResult = useCallback(
     (threadId: string, toolCallId: string, result: string) => {
+      const existingToolMessage =
+        active?.messages.find((message) => message.toolCallId === toolCallId) ?? null;
+      const owner =
+        active?.messages
+          .flatMap((message) => message.toolCalls ?? [])
+          .find((toolCall) => toolCall.id === toolCallId) ?? null;
       const message: ChatMessage = {
-        id: generateId(),
+        id: existingToolMessage?.id ?? generateId(),
         role: "tool",
         content: result,
         toolCallId,
+        ...(owner?.stepId ? { stepId: owner.stepId } : {}),
+        ...(owner?.parentStepId ? { parentStepId: owner.parentStepId } : {}),
+        ...(owner?.stepKind ? { stepKind: owner.stepKind } : {}),
+        ...(owner?.stepName ? { stepName: owner.stepName } : {}),
+        ...(owner?.parentStepName
+          ? { parentStepName: owner.parentStepName }
+          : {}),
         createdAt: now(),
       };
       handleThreadEvent(threadId, {
@@ -245,7 +471,7 @@ export function useThreads({
       });
       return message;
     },
-    [handleThreadEvent, generateId],
+    [active?.messages, handleThreadEvent, generateId],
   );
 
   const remove = useCallback(

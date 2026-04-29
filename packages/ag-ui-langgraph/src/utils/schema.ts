@@ -1,4 +1,6 @@
 import type { SchemaKeys } from "../types.js";
+import type { RunnableConfigLike } from "../types.js";
+import { isRecord } from "../events/guards.js";
 
 function schemaKeysFrom(schema: unknown): string[] {
   const maybeSchema =
@@ -27,12 +29,12 @@ function schemaKeysFrom(schema: unknown): string[] {
 }
 
 function readGraphSchemaKeys(
-  graph: any,
+  graph: unknown,
   names: string[],
-  config?: Record<string, any>,
+  config?: RunnableConfigLike,
 ): string[] {
   for (const name of names) {
-    const value = graph?.[name];
+    const value = isRecord(graph) ? graph[name] : undefined;
     if (typeof value !== "function") continue;
     try {
       return schemaKeysFrom(value.call(graph, config));
@@ -44,8 +46,8 @@ function readGraphSchemaKeys(
 }
 
 export function getGraphSchemaKeys(opts: {
-  graph: any;
-  config: Record<string, any>;
+  graph: unknown;
+  config: RunnableConfigLike;
   constantSchemaKeys: string[];
 }): SchemaKeys {
   const { graph, config, constantSchemaKeys } = opts;

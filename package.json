@@ -3,8 +3,8 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "concurrently -n server,client -c blue,green \"pnpm --filter ag-ui-chat-server run dev\" \"pnpm --filter ag-ui-chat-client run dev\"",
-    "dev:server": "pnpm --filter ag-ui-chat-server run dev",
+    "dev": "pnpm --filter ag-ui-langgraph run build && concurrently -n server,client -c blue,green \"pnpm --filter ag-ui-chat-server run dev\" \"pnpm --filter ag-ui-chat-client run dev\"",
+    "dev:server": "pnpm --filter ag-ui-langgraph run build && pnpm --filter ag-ui-chat-server run dev",
     "dev:client": "pnpm --filter ag-ui-chat-client run dev",
     "lint": "pnpm --filter ag-ui-chat-server run lint",
     "build": "pnpm --filter ag-ui-chat-client run build",

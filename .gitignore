@@ -5,3 +5,4 @@ dist
 .DS_Store
 .dbg
 .traepython_agent.py
+.trae/

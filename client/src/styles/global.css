@@ -220,10 +220,33 @@ body {
   line-height: 1.7;
 }
 
-.message-content p { margin: 0 0 12px; }
-.message-content p:last-child { margin-bottom: 0; }
+.message-markdown {
+  font-size: 15px;
+  line-height: 1.7;
+}
 
-.message-content pre {
+.message-source {
+  margin-bottom: 8px;
+}
+
+.message-source-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(16, 163, 127, 0.35);
+  background: rgba(16, 163, 127, 0.08);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.message-markdown p { margin: 0 0 12px; }
+.message-markdown p:last-child { margin-bottom: 0; }
+
+.message-markdown pre {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -235,7 +258,7 @@ body {
   line-height: 1.5;
 }
 
-.message-content code {
+.message-markdown code {
   background: var(--bg-tertiary);
   padding: 2px 6px;
   border-radius: 4px;
@@ -243,18 +266,18 @@ body {
   font-size: 13px;
 }
 
-.message-content pre code { background: none; padding: 0; }
-.message-content ul, .message-content ol { margin: 8px 0; padding-left: 24px; }
-.message-content li { margin: 4px 0; }
+.message-markdown pre code { background: none; padding: 0; }
+.message-markdown ul, .message-markdown ol { margin: 8px 0; padding-left: 24px; }
+.message-markdown li { margin: 4px 0; }
 
-.message-content table { border-collapse: collapse; margin: 12px 0; width: 100%; }
-.message-content th, .message-content td {
+.message-markdown table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+.message-markdown th, .message-markdown td {
   border: 1px solid var(--border-color);
   padding: 8px 12px;
   text-align: left;
   font-size: 14px;
 }
-.message-content th { background: var(--bg-tertiary); font-weight: 600; }
+.message-markdown th { background: var(--bg-tertiary); font-weight: 600; }
 
 .cursor-blink { animation: blink 1s step-end infinite; color: var(--accent); }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
@@ -368,10 +391,57 @@ body {
 .agent-node {
   position: relative;
   margin: 0 0 12px;
+  padding-left: 4px;
 }
 
 .agent-node.depth-1 { margin-left: 22px; }
 .agent-node.depth-2 { margin-left: 44px; }
+
+.agent-node-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px 42px;
+  min-width: 0;
+}
+
+.agent-relation {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.agent-relation.root {
+  border-color: rgba(250, 204, 21, 0.26);
+  background: rgba(250, 204, 21, 0.08);
+  color: #facc15;
+}
+
+.agent-relation.child {
+  border-color: rgba(96, 165, 250, 0.26);
+  background: rgba(96, 165, 250, 0.08);
+  color: #93c5fd;
+}
+
+.agent-hierarchy-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
 
 .agent-node-header {
   display: flex;
@@ -407,6 +477,13 @@ body {
   min-width: 0;
 }
 
+.agent-title-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .agent-title span {
   color: var(--text-primary);
   font-size: 14px;
@@ -418,6 +495,10 @@ body {
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.25;
+}
+
+.agent-parent-name {
+  color: #93c5fd;
 }
 
 .agent-status {
@@ -447,6 +528,20 @@ body {
   min-height: 30px;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.trace-message-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(16, 163, 127, 0.24);
+  background: rgba(16, 163, 127, 0.08);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .trace-dot {
@@ -590,7 +685,66 @@ body {
 }
 
 .trace-child-agent {
-  margin-top: 12px;
+  position: relative;
+  margin: 12px 0 12px;
+  padding-left: 14px;
+  border-left: 1px dashed rgba(96, 165, 250, 0.35);
+}
+
+.trace-child-agent::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 18px;
+  width: 12px;
+  height: 1px;
+  background: rgba(96, 165, 250, 0.45);
+}
+
+.trace-child-agent > .agent-node {
+  margin-left: 0;
+}
+
+.trace-child-agent-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 0 8px 0;
+  padding-left: 12px;
+}
+
+.trace-child-agent-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.08);
+  color: #93c5fd;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.trace-child-agent-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.trace-subagent-input {
+  margin: 0 0 10px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  background: rgba(96, 165, 250, 0.06);
 }
 
 /* ===== STEP INDICATOR (Sub-agent execution) ===== */
@@ -878,10 +1032,12 @@ body {
   .tool-calls, .frontend-tool-ui { padding: 0 16px; }
   .execution-tree { padding: 0 8px 0 16px; }
   .agent-node.depth-1, .agent-node.depth-2 { margin-left: 10px; }
+  .agent-node-meta { margin-left: 0; flex-wrap: wrap; }
   .agent-node-body { padding-left: 18px; }
   .trace-message::before, .trace-tool::before { left: -23px; width: 10px; }
   .trace-tool-header { flex-wrap: wrap; }
   .trace-tool-name { white-space: normal; }
+  .trace-child-agent-link { padding-left: 0; flex-wrap: wrap; }
   .feature-grid { grid-template-columns: 1fr; }
   .mode-switch button { padding: 4px 8px; }
   .step-indicator { padding: 0 8px; }
