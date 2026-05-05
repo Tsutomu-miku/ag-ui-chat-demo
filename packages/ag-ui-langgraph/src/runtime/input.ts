@@ -1,8 +1,8 @@
 import type { RunAgentInput } from "@ag-ui/core";
 
 import type { ForwardedProps, RunnableConfigLike } from "../types.js";
-import { camelToSnake } from "../utils/convert.js";
-import { isRecord } from "../events/guards.js";
+import { camelToSnake } from "../messages/convert.js";
+import { isRecord } from "../shared/guards.js";
 
 export type NormalizedRunAgentInput = RunAgentInput & {
   forwarded_props?: ForwardedProps;

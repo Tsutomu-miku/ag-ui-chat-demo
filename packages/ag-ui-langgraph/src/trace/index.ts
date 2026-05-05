@@ -3,11 +3,20 @@ export {
   AG_UI_TRACE_PROTOCOL_VERSION,
   createTraceCustomEvent,
   traceSourceFromLangGraphEvent,
-} from "./trace/protocol.js";
+} from "./protocol.js";
 
 export type {
   AgUiTraceCustomEvent,
   AgUiTraceCustomValue,
   AgUiTraceEvent,
   AgUiTraceSource,
-} from "./trace/protocol.js";
+} from "./protocol.js";
+
+export {
+  createProtocolTracePlugin,
+} from "../plugins/trace.js";
+
+export type {
+  LangGraphPlugin,
+  LangGraphPluginContext,
+} from "../plugins/trace.js";

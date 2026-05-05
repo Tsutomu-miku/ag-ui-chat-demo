@@ -10,7 +10,7 @@ import {
   AG_UI_TRACE_EVENT_NAME,
   AG_UI_TRACE_PROTOCOL_VERSION,
   createProtocolTracePlugin,
-} from "../src/index.js";
+} from "../../src/index.js";
 
 describe("LangGraphEventTypes", () => {
   it("has all 11 event types", () => {

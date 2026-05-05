@@ -3,31 +3,18 @@ import type {
   PredictStateTool,
   ToolCallChunk,
 } from "../types.js";
+import {
+  arrayValue,
+  isRecord,
+  recordValue,
+} from "../shared/guards.js";
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export function recordValue(
-  value: unknown,
-  key: string,
-): unknown | undefined {
-  if (!isRecord(value)) return undefined;
-  return value[key];
-}
-
-export function stringValue(
-  value: unknown,
-  key: string,
-): string | undefined {
-  const item = recordValue(value, key);
-  return typeof item === "string" ? item : undefined;
-}
-
-export function arrayValue(value: unknown, key: string): unknown[] {
-  const item = recordValue(value, key);
-  return Array.isArray(item) ? item : [];
-}
+export {
+  arrayValue,
+  isRecord,
+  recordValue,
+  stringValue,
+} from "../shared/guards.js";
 
 export function chunkGet<T = unknown>(
   chunk: unknown,
@@ -54,12 +41,20 @@ export function asLangGraphStreamEvent(value: unknown): LangGraphStreamEvent {
 
 function asToolCallChunk(value: unknown): ToolCallChunk | null {
   if (!isRecord(value)) return null;
-  return {
+  const chunk = {
     id: typeof value.id === "string" ? value.id : undefined,
     name: typeof value.name === "string" ? value.name : undefined,
     args: value.args,
     index: typeof value.index === "number" ? value.index : undefined,
   };
+  if (
+    chunk.id === undefined &&
+    chunk.name === undefined &&
+    chunk.args === undefined
+  ) {
+    return null;
+  }
+  return chunk;
 }
 
 function asLegacyToolCallChunk(

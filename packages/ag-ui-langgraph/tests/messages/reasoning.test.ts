@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveReasoningContent,
   resolveEncryptedReasoningContent,
-} from "../src/utils/convert.js";
+} from "../../src/messages/convert.js";
 
 describe("resolveReasoningContent", () => {
   it("returns null for null input", () => {

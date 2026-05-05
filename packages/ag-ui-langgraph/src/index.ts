@@ -1,7 +1,7 @@
 /**
  * ag-ui-langgraph — AG-UI protocol adapter for LangGraph.
  *
- * TypeScript implementation fully aligned with Python ag_ui_langgraph (v0.0.34).
+ * TypeScript implementation aligned with the Python ag_ui_langgraph adapter.
  *
  * ## Architecture (aligned with Python)
  *
@@ -61,34 +61,21 @@ export type {
 
 // ── Types (aligned with Python types.py) ──
 export type {
-  StreamEventMetadata,
   LangChainToolCall,
   LangGraphReasoning,
   State,
   SchemaKeys,
-  ThinkingProcess,
-  MessageInProgress,
-  RunMetadata,
-  MessagesInProgressRecord,
   ToolCall,
   JsonPrimitive,
   JsonValue,
   JsonObject,
   RunnableConfigLike,
   LocalCompiledGraph,
-  BaseLangGraphPlatformMessage,
-  LangGraphPlatformResultMessage,
-  LangGraphPlatformActionExecutionMessage,
   LangGraphPlatformMessage,
   PredictStateTool,
-  PreparedStream,
   ForwardedProps,
   LangGraphStreamEvent,
   ToolCallChunk,
-  InterruptLike,
-  CheckpointTaskLike,
-  CheckpointSnapshotLike,
-  GraphWithCheckpointing,
   TraceStepKind,
 } from "./types.js";
 
@@ -134,6 +121,6 @@ export {
   camelToSnake,
   filterObjectBySchemaKeys,
   getStreamPayloadInput,
-} from "./utils/convert.js";
+} from "./messages/convert.js";
 
-export type { AGUIContentItem } from "./utils/convert.js";
+export type { AGUIContentItem } from "./messages/convert.js";

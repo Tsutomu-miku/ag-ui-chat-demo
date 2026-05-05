@@ -28,7 +28,7 @@ import {
   flattenUserContent,
   normalizeToolContent,
   camelToSnake,
-} from "../src/utils/convert.js";
+} from "../../src/messages/convert.js";
 
 // ============================================================
 // contentToString
@@ -89,6 +89,11 @@ describe("parseToolArgs", () => {
 
   it("returns empty object for empty string", () => {
     expect(parseToolArgs("")).toEqual({});
+  });
+
+  it("returns empty object for non-object JSON", () => {
+    expect(parseToolArgs("[]")).toEqual({});
+    expect(parseToolArgs('"value"')).toEqual({});
   });
 });
 
@@ -667,6 +672,11 @@ describe("flattenUserContent", () => {
 // ============================================================
 
 describe("normalizeToolContent", () => {
+  it("normalizes nullish content to an empty string", () => {
+    expect(normalizeToolContent(null)).toBe("");
+    expect(normalizeToolContent(undefined)).toBe("");
+  });
+
   it("passes through strings", () => {
     expect(normalizeToolContent("result")).toBe("result");
   });

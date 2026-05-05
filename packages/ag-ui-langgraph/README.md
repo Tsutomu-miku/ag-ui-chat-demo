@@ -47,6 +47,36 @@ Convenience factories are also exported:
   `@langchain/langgraph-supervisor` topology from named sub-agents, compiles it,
   and wraps it.
 
+The npm package intentionally exposes only the root entrypoint:
+
+```ts
+import { LangGraphAgent, createReactAgent } from "ag-ui-langgraph";
+```
+
+Internal source directories are organized for maintainers, not as npm subpath
+exports. Treat imports such as `ag-ui-langgraph/messages` or
+`ag-ui-langgraph/runtime` as unsupported.
+
+## Source Layout
+
+The TypeScript implementation is organized by runtime responsibility rather
+than by mirroring the Python file names:
+
+```text
+src/
+  agent/        stream-local agent state, reasoning helpers, trace state
+  messages/     AG-UI <-> LangChain message conversion and JSON-safe utilities
+  runtime/      LangGraph graph/input/stream interop helpers
+  state/        schema-key filtering and state merge helpers
+  trace/        canonical ag-ui.trace protocol payloads
+  translation/  LangGraph event translation context and event helpers
+  shared/       small cross-domain guards
+```
+
+`src/agent.ts` remains the primary adapter class and orchestrates these focused
+modules. Compatibility shims are kept only where they avoid unnecessary churn;
+new implementation code should prefer the domain directories above.
+
 ## Event Translation
 
 | LangGraph event | AG-UI event(s) |
@@ -98,12 +128,28 @@ snapshot suppression, and provider-specific reasoning extraction.
 
 ```bash
 pnpm --filter ag-ui-langgraph run test
+pnpm --filter ag-ui-langgraph run test:coverage
 pnpm --filter ag-ui-langgraph run typecheck
 ```
 
 The package test suite covers conversion utilities, reasoning extraction,
 JSON-safe serialization, schema filtering, checkpoint/interrupt behavior, state
-merge behavior, and LangGraph event translation.
+merge behavior, factory helpers, runtime graph helpers, and LangGraph event
+translation. `test:coverage` enforces global coverage thresholds before
+publishing.
+
+Tests follow the same domain boundaries as `src`:
+
+```text
+tests/
+  agent/
+  messages/
+  runtime/
+  state/
+  shared/
+  translation/
+  package/
+```
 
 ## Publishing
 
@@ -111,11 +157,12 @@ The npm package is emitted from `dist`:
 
 ```bash
 pnpm --filter ag-ui-langgraph run typecheck
-pnpm --filter ag-ui-langgraph run test
+pnpm --filter ag-ui-langgraph run test:coverage
 pnpm --filter ag-ui-langgraph run build
 pnpm --filter ag-ui-langgraph run publish:check-name
 pnpm --filter ag-ui-langgraph run publish:dry
 ```
 
-`publish:dry` runs `npm pack --dry-run`; the real publish step is intentionally
-left to the package owner.
+The build script removes `dist` before compiling so deleted modules cannot leak
+into the tarball. `publish:dry` runs `npm pack --dry-run`; the real publish step
+is intentionally left to the package owner.

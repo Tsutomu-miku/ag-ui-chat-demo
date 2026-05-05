@@ -5,7 +5,7 @@ import type { CompiledStateGraph } from "@langchain/langgraph";
  * AG-UI LangGraph Types
  *
  * TypeScript equivalents of Python ag_ui_langgraph.types
- * Aligned with Python v0.0.34
+ * Aligned with the Python ag_ui_langgraph adapter
  */
 
 // ── LangGraph internal event types (from astream_events) ──

@@ -1,6 +1,6 @@
 import type { SchemaKeys } from "../types.js";
 import type { RunnableConfigLike } from "../types.js";
-import { isRecord } from "../events/guards.js";
+import { isRecord } from "../shared/guards.js";
 
 function schemaKeysFrom(schema: unknown): string[] {
   const maybeSchema =

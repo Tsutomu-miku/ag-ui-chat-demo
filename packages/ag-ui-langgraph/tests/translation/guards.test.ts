@@ -5,11 +5,11 @@ import {
   getPredictStateTools,
   getSubgraphInfo,
   getToolCallChunks,
-} from "../src/events/guards.js";
+} from "../../src/events/guards.js";
 import {
   collectInterrupts,
   detectSubgraphNames,
-} from "../src/runtime/graph.js";
+} from "../../src/runtime/graph.js";
 
 describe("runtime event guards", () => {
   it("normalizes unknown stream events without throwing", () => {
@@ -36,7 +36,7 @@ describe("runtime event guards", () => {
     });
   });
 
-  it("extracts multi tool-call chunks by index", () => {
+  it("extracts valid multi tool-call chunks by index", () => {
     const chunks = getToolCallChunks({
       tool_call_chunks: [
         { id: "tc-a", index: 0, name: "alpha", args: '{"a":' },
@@ -48,7 +48,6 @@ describe("runtime event guards", () => {
     expect(chunks).toEqual([
       { id: "tc-a", index: 0, name: "alpha", args: '{"a":' },
       { id: "tc-b", index: 1, name: "beta", args: '{"b":1}' },
-      { id: undefined, index: undefined, name: undefined, args: undefined },
     ]);
   });
 

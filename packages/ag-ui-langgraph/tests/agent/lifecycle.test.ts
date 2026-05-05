@@ -22,13 +22,13 @@ import {
 import { Command } from "@langchain/langgraph";
 import { describe, expect, it, vi } from "vitest";
 
-import { LangGraphAgent, type LangGraphAgentConfig } from "../src/agent.js";
-import { createProtocolTracePlugin } from "../src/plugins/trace.js";
+import { LangGraphAgent, type LangGraphAgentConfig } from "../../src/agent.js";
+import { createProtocolTracePlugin } from "../../src/plugins/trace.js";
 import {
   AG_UI_TRACE_EVENT_NAME,
   type AgUiTraceCustomValue,
-} from "../src/trace.js";
-import { LangGraphEventTypes, CustomEventNames } from "../src/types.js";
+} from "../../src/trace.js";
+import { LangGraphEventTypes, CustomEventNames } from "../../src/types.js";
 
 // ── Helpers ──
 
