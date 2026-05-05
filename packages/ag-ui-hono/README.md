@@ -37,7 +37,7 @@ const agentApp = createAgentEndpoint(
 app.route("/api/agent", agentApp);
 ```
 
-## API
+## Public API
 
 ### `createAgentEndpoint(handler, options?)`
 
@@ -54,6 +54,56 @@ Returns a `Hono` app with:
 - `POST /` — Agent endpoint (accepts `RunAgentInput` JSON, streams SSE)
 - `GET /health` — Health check (`{ status: "ok" }`)
 
-## Test Coverage
+The npm package intentionally exposes only the root entrypoint:
 
-8 tests covering: app creation, health endpoint, input validation, SSE streaming, input transformation, completion hooks, error hooks.
+```ts
+import { createAgentEndpoint } from "ag-ui-hono";
+```
+
+Internal source files are not subpath exports. Treat imports such as
+`ag-ui-hono/endpoint` as unsupported.
+
+## Source Layout
+
+The package is intentionally small:
+
+```text
+src/
+  endpoint.ts  Hono endpoint factory, streaming, hooks, and error handling
+  index.ts     root public exports
+tests/
+  endpoint.test.ts  endpoint behavior
+  package/          npm publishing metadata and public export contract
+```
+
+Keep new implementation code in focused modules only when the endpoint grows
+past a single responsibility.
+
+## Testing
+
+```bash
+pnpm --filter ag-ui-hono run test
+pnpm --filter ag-ui-hono run test:coverage
+pnpm --filter ag-ui-hono run typecheck
+```
+
+The test suite covers app creation, health checks, invalid input, SSE event
+encoding, input transformation, lifecycle hooks, handler failures, package
+exports, and npm publishing metadata. `test:coverage` enforces global coverage
+thresholds before publishing.
+
+## Publishing
+
+The npm package is emitted from `dist`:
+
+```bash
+pnpm --filter ag-ui-hono run typecheck
+pnpm --filter ag-ui-hono run test:coverage
+pnpm --filter ag-ui-hono run build
+pnpm --filter ag-ui-hono run publish:check-name
+pnpm --filter ag-ui-hono run publish:dry
+```
+
+The build script removes `dist` before compiling so deleted modules cannot leak
+into the tarball. `publish:dry` runs `npm pack --dry-run`; the real publish step
+is intentionally left to the package owner.

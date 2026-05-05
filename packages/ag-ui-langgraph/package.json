@@ -1,7 +1,16 @@
 {
   "name": "ag-ui-langgraph",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AG-UI protocol adapter for LangGraph \u2014 TypeScript implementation aligned with Python ag-ui-langgraph",
+  "homepage": "https://github.com/Tsutomu-miku/ag-ui-chat-demo#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tsutomu-miku/ag-ui-chat-demo.git",
+    "directory": "packages/ag-ui-langgraph"
+  },
+  "bugs": {
+    "url": "https://github.com/Tsutomu-miku/ag-ui-chat-demo/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -12,16 +12,20 @@ LangGraph compiled graph -> graph.streamEvents({ version: "v2" }) -> AG-UI event
 ```ts
 import { LangGraphAgent } from "ag-ui-langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { createAgentEndpoint } from "ag-ui-hono";
 
 const graph = createReactAgent({ llm: model, tools });
 const agent = new LangGraphAgent({ name: "assistant", graph });
 
-const app = createAgentEndpoint((input) => agent.clone().run(input));
+for await (const event of agent.clone().run(input)) {
+  // Forward each AG-UI event to your runtime, transport, or client.
+  console.log(event);
+}
 ```
 
 `clone()` should be used per request so stream-local state such as in-progress
 messages, tool calls, reasoning blocks, and active steps is isolated.
+`ag-ui-langgraph` does not require a specific HTTP framework; expose the
+returned async generator through whatever transport your application uses.
 
 ## Public API
 
