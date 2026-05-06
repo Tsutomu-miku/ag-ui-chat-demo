@@ -17,20 +17,29 @@ export type AgUiTraceEvent =
   | {
       type: "span.start";
       spanId: string;
+      /** Canonical agent id — equal to `spanId` for the owning agent */
+      agentId: string;
+      /** Human-readable agent/step name (e.g. "writer", "supervisor") */
+      agentName: string;
       name: string;
       kind: TraceStepKind;
       parentSpanId?: string;
+      /** Parent agent id (supervisor span id for a sub-agent) */
+      parentAgentId?: string;
       source?: AgUiTraceSource;
     }
   | {
       type: "span.end";
       spanId: string;
+      agentId: string;
       source?: AgUiTraceSource;
     }
   | {
       type: "message.link";
       messageId: string;
       spanId: string;
+      agentId: string;
+      agentName: string;
       role?: string;
       source?: AgUiTraceSource;
     }
@@ -38,6 +47,8 @@ export type AgUiTraceEvent =
       type: "tool.link";
       toolCallId: string;
       spanId: string;
+      agentId: string;
+      agentName: string;
       toolCallName?: string;
       parentMessageId?: string;
       source?: AgUiTraceSource;

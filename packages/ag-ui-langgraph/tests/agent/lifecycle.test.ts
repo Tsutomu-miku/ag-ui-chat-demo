@@ -1120,6 +1120,143 @@ describe("event translation: step management", () => {
     );
   });
 
+  it("attributes toolcalls to the correct sub-agent when two sub-agents run in parallel with interleaved events", async () => {
+    // Two parallel sub-agents (writer + researcher) emit interleaved events.
+    // The full `langgraph_checkpoint_ns` differs between them (uuid suffix),
+    // so attribution must flow from the source event's namespace, not from
+    // a single global "active span" pointer.
+    const writerNs = "writer:subgraph|agent:aaa";
+    const researcherNs = "researcher:subgraph|agent:bbb";
+
+    const graph = createMockGraph([
+      // Supervisor routes work to two sub-agents.
+      ...withCheckpointNamespace(
+        textStreamEvents("Spawning", "agent", "msg-supervisor-1"),
+        "supervisor:root|agent:1",
+      ),
+      // Writer text stream — writer span becomes active.
+      ...withCheckpointNamespace(
+        textStreamEvents("Writer running", "agent", "msg-writer-1"),
+        writerNs,
+      ),
+      // Researcher text stream — active span FLIPS to researcher.
+      ...withCheckpointNamespace(
+        textStreamEvents("Researcher running", "agent", "msg-researcher-1"),
+        researcherNs,
+      ),
+      // Writer toolcall arrives while researcher is the most recent span.
+      // Without Plan C this would be misattributed to researcher.
+      ...withCheckpointNamespace(
+        toolCallStreamEvents(
+          "compose_text",
+          "tc-writer",
+          { topic: "tokyo" },
+          "agent",
+          "msg-writer-2",
+        ),
+        writerNs,
+      ),
+      // Researcher toolcall arrives next, must attribute to researcher.
+      ...withCheckpointNamespace(
+        toolCallStreamEvents(
+          "search_web",
+          "tc-researcher",
+          { query: "tokyo facts" },
+          "agent",
+          "msg-researcher-2",
+        ),
+        researcherNs,
+      ),
+    ]);
+    const agent = new LangGraphAgent({
+      name: "supervisor",
+      graph,
+      subAgents: ["writer", "researcher"],
+    });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const trace = traceValues(events);
+
+    const writerSpanIds = new Set(
+      trace
+        .filter(
+          (event) => event.type === "span.start" && event.name === "writer",
+        )
+        .map((event) => event.spanId),
+    );
+    const researcherSpanIds = new Set(
+      trace
+        .filter(
+          (event) => event.type === "span.start" && event.name === "researcher",
+        )
+        .map((event) => event.spanId),
+    );
+
+    expect(writerSpanIds.size).toBeGreaterThanOrEqual(1);
+    expect(researcherSpanIds.size).toBeGreaterThanOrEqual(1);
+    // Sub-agent spans must be distinct.
+    for (const id of writerSpanIds) {
+      expect(researcherSpanIds.has(id)).toBe(false);
+    }
+
+    // Every toolcall event must carry agent attribution stamped in place.
+    type Stamped = BaseEvent & {
+      toolCallId?: string;
+      agentId?: string;
+      agentName?: string;
+      spanId?: string;
+    };
+    const writerToolStart = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        (event as Stamped).toolCallId === "tc-writer",
+    ) as Stamped | undefined;
+    const researcherToolStart = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        (event as Stamped).toolCallId === "tc-researcher",
+    ) as Stamped | undefined;
+
+    expect(writerToolStart?.agentName).toBe("writer");
+    expect(writerSpanIds.has(writerToolStart?.agentId ?? "")).toBe(true);
+    expect(writerToolStart?.spanId).toBe(writerToolStart?.agentId);
+
+    expect(researcherToolStart?.agentName).toBe("researcher");
+    expect(researcherSpanIds.has(researcherToolStart?.agentId ?? "")).toBe(
+      true,
+    );
+    expect(researcherToolStart?.spanId).toBe(researcherToolStart?.agentId);
+
+    // Tool links must point to a span owned by the correct sub-agent.
+    const writerToolLink = trace.find(
+      (event) =>
+        event.type === "tool.link" && event.toolCallId === "tc-writer",
+    );
+    const researcherToolLink = trace.find(
+      (event) =>
+        event.type === "tool.link" && event.toolCallId === "tc-researcher",
+    );
+    expect(writerToolLink?.agentName).toBe("writer");
+    expect(writerSpanIds.has(writerToolLink?.spanId ?? "")).toBe(true);
+    expect(researcherToolLink?.agentName).toBe("researcher");
+    expect(researcherSpanIds.has(researcherToolLink?.spanId ?? "")).toBe(true);
+
+    // TOOL_CALL_ARGS / TOOL_CALL_END follow-ups for each toolcall must carry
+    // the same agent attribution as their TOOL_CALL_START.
+    const writerArgs = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_ARGS &&
+        (event as Stamped).toolCallId === "tc-writer",
+    ) as Stamped | undefined;
+    const researcherArgs = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_ARGS &&
+        (event as Stamped).toolCallId === "tc-researcher",
+    ) as Stamped | undefined;
+    expect(writerArgs?.agentId).toBe(writerToolStart?.agentId);
+    expect(researcherArgs?.agentId).toBe(researcherToolStart?.agentId);
+  });
+
   it("emits canonical tool links for tool-only assistant messages", async () => {
     const graph = createMockGraph([
       ...toolCallStreamEvents(

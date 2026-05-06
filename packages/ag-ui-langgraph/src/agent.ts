@@ -1062,8 +1062,20 @@ export class LangGraphAgent {
           parentMessageId,
         ),
     })) {
+      // Run trace link emission FIRST so `stampAgentAttribution` can mutate
+      // `agUiEvent` in place (adding `agentId` / `agentName` / `spanId`)
+      // before it is yielded to downstream consumers. We buffer the trace
+      // link events themselves and yield them after the (now-stamped) source
+      // event so the downstream order remains:
+      //   <source event with attribution> → <message.link / tool.link>
+      const traceLinkEvents: BaseEvent[] = [];
+      for (const linkEvent of this.emitTraceLinksForEvent(agUiEvent, event)) {
+        traceLinkEvents.push(linkEvent);
+      }
       yield agUiEvent;
-      yield* this.emitTraceLinksForEvent(agUiEvent, event);
+      for (const linkEvent of traceLinkEvents) {
+        yield linkEvent;
+      }
     }
   }
 }

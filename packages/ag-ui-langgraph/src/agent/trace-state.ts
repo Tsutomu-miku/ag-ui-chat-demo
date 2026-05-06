@@ -18,6 +18,12 @@ export type ActiveTraceSpan = {
   name: string;
   kind: TraceStepKind;
   parentSpanId?: string;
+  /**
+   * Full LangGraph checkpoint namespace that owns this span (e.g.
+   * `writer:subgraph|agent:3f2a`). Retained for resolving ownership of
+   * interleaved events from parallel sub-agent branches.
+   */
+  checkpointNamespace?: string;
 };
 
 export type TraceState = {
@@ -27,6 +33,12 @@ export type TraceState = {
   linkedTraceMessages: Set<string>;
   linkedTraceTools: Set<string>;
   traceSpans: Map<string, ActiveTraceSpan>;
+  /**
+   * Full-namespace → spanId index. Used to attribute events emitted from
+   * parallel sub-agent branches whose root name collides but whose uuid
+   * suffix differs (`writer:subgraph|agent:aaa` vs `writer:subgraph|agent:bbb`).
+   */
+  traceSpansByNamespace: Map<string, string>;
   traceMessageOwners: Map<string, string>;
   traceToolOwners: Map<string, string>;
 };
@@ -49,6 +61,7 @@ export function createTraceState(): TraceState {
     linkedTraceMessages: new Set<string>(),
     linkedTraceTools: new Set<string>(),
     traceSpans: new Map<string, ActiveTraceSpan>(),
+    traceSpansByNamespace: new Map<string, string>(),
     traceMessageOwners: new Map<string, string>(),
     traceToolOwners: new Map<string, string>(),
   };
@@ -61,17 +74,28 @@ export function resetTraceState(state: TraceState): void {
   state.linkedTraceMessages.clear();
   state.linkedTraceTools.clear();
   state.traceSpans.clear();
+  state.traceSpansByNamespace.clear();
   state.traceMessageOwners.clear();
   state.traceToolOwners.clear();
 }
 
-export function getTraceNamespaceRoot(
+/** Returns the full `langgraph_checkpoint_ns` string if present. */
+export function getCheckpointNamespace(
   sourceEvent?: LangGraphStreamEvent | null,
 ): string | undefined {
   const checkpointNamespace =
     typeof sourceEvent?.metadata?.langgraph_checkpoint_ns === "string"
       ? sourceEvent.metadata.langgraph_checkpoint_ns
       : undefined;
+  return checkpointNamespace && checkpointNamespace.length > 0
+    ? checkpointNamespace
+    : undefined;
+}
+
+export function getTraceNamespaceRoot(
+  sourceEvent?: LangGraphStreamEvent | null,
+): string | undefined {
+  const checkpointNamespace = getCheckpointNamespace(sourceEvent);
   const namespaceRoot = checkpointNamespace?.split("|")[0]?.split(":")[0];
 
   if (
@@ -146,6 +170,29 @@ export function buildTraceSource(
   });
 }
 
+/**
+ * Resolve which span owns a given source LangGraph event by looking up its
+ * full checkpoint namespace. Falls back to the currently active span only if
+ * no namespace is available (single-agent / non-subgraph flows).
+ *
+ * This is the primary mechanism that lets parallel sub-agent branches be
+ * distinguished even when their events interleave on the stream.
+ */
+export function resolveSpanForSource(
+  ctx: Pick<TraceStateContext, "state">,
+  sourceEvent?: LangGraphStreamEvent | null,
+): ActiveTraceSpan | null {
+  const ns = getCheckpointNamespace(sourceEvent);
+  if (ns) {
+    const spanId = ctx.state.traceSpansByNamespace.get(ns);
+    if (spanId) {
+      const span = ctx.state.traceSpans.get(spanId);
+      if (span) return span;
+    }
+  }
+  return ctx.state.activeTraceSpan;
+}
+
 export function* startTraceSpan(
   ctx: TraceStateContext,
   stepName: string,
@@ -156,14 +203,21 @@ export function* startTraceSpan(
   const spanId = nextTraceSpanId(ctx, traceStepName);
   const parentSpanId =
     kind === "subagent" ? ctx.state.lastSupervisorSpanId : undefined;
+  const checkpointNamespace = getCheckpointNamespace(sourceEvent);
 
-  ctx.state.activeTraceSpan = {
+  const span: ActiveTraceSpan = {
     spanId,
     name: traceStepName,
     kind,
     ...(parentSpanId ? { parentSpanId } : {}),
+    ...(checkpointNamespace ? { checkpointNamespace } : {}),
   };
-  ctx.state.traceSpans.set(spanId, ctx.state.activeTraceSpan);
+
+  ctx.state.activeTraceSpan = span;
+  ctx.state.traceSpans.set(spanId, span);
+  if (checkpointNamespace) {
+    ctx.state.traceSpansByNamespace.set(checkpointNamespace, spanId);
+  }
 
   if (kind === "supervisor") {
     ctx.state.lastSupervisorSpanId = spanId;
@@ -172,9 +226,13 @@ export function* startTraceSpan(
   yield* emitTraceEvent(ctx, {
     type: "span.start",
     spanId,
+    agentId: spanId,
+    agentName: traceStepName,
     name: traceStepName,
     kind,
-    ...(parentSpanId ? { parentSpanId } : {}),
+    ...(parentSpanId
+      ? { parentSpanId, parentAgentId: parentSpanId }
+      : {}),
     source: buildTraceSource(ctx, traceStepName, sourceEvent),
   });
 }
@@ -195,10 +253,31 @@ export function* finishTraceSpan(
   yield* emitTraceEvent(ctx, {
     type: "span.end",
     spanId: span.spanId,
+    agentId: span.spanId,
     source: buildTraceSource(ctx, traceStepName, sourceEvent),
   });
 
   ctx.state.activeTraceSpan = null;
+}
+
+/**
+ * Stamp agent attribution onto an in-flight AG-UI protocol event.
+ * The frontend can read `agentId`/`agentName` directly from the event, without
+ * needing to join a separate trace link. Safe even for consumers that do not
+ * understand the additional fields (they are simply ignored).
+ */
+function stampAgentAttribution(
+  event: BaseEvent,
+  span: ActiveTraceSpan,
+): void {
+  const stamped = event as BaseEvent & {
+    agentId?: string;
+    agentName?: string;
+    spanId?: string;
+  };
+  if (stamped.agentId === undefined) stamped.agentId = span.spanId;
+  if (stamped.agentName === undefined) stamped.agentName = span.name;
+  if (stamped.spanId === undefined) stamped.spanId = span.spanId;
 }
 
 export function* emitTraceLinksForEvent(
@@ -206,7 +285,6 @@ export function* emitTraceLinksForEvent(
   event: BaseEvent,
   sourceEvent?: LangGraphStreamEvent | null,
 ): Generator<BaseEvent> {
-  const activeSpan = ctx.state.activeTraceSpan;
   const traceEvent = event as BaseEvent &
     Partial<{
       messageId: string;
@@ -216,28 +294,67 @@ export function* emitTraceLinksForEvent(
       toolCallName: string;
     }>;
 
-  const resolveSpan = (spanId?: string): ActiveTraceSpan | null => {
-    if (!spanId) return activeSpan;
-    return ctx.state.traceSpans.get(spanId) ?? activeSpan ?? null;
+  /**
+   * Resolve a span for a specific link. Priority:
+   *   1. explicit spanId override (already-attributed case)
+   *   2. owner of a referenced messageId (same span the assistant message lives in)
+   *   3. owner of a referenced toolCallId (for TOOL_CALL_RESULT attribution)
+   *   4. full-namespace lookup against the source LangGraph event
+   *   5. currently active span (legacy single-agent fallback)
+   *
+   * Steps 2–4 make attribution **concurrency-safe**: each sub-agent's events
+   * are keyed on stable identifiers that survive event-stream interleaving.
+   */
+  const resolveSpan = (
+    opts: {
+      spanId?: string;
+      messageId?: string;
+      toolCallId?: string;
+    } = {},
+  ): ActiveTraceSpan | null => {
+    if (opts.spanId) {
+      return ctx.state.traceSpans.get(opts.spanId) ?? null;
+    }
+    if (opts.messageId) {
+      const s = ctx.state.traceMessageOwners.get(opts.messageId);
+      if (s) {
+        const span = ctx.state.traceSpans.get(s);
+        if (span) return span;
+      }
+    }
+    if (opts.toolCallId) {
+      const s = ctx.state.traceToolOwners.get(opts.toolCallId);
+      if (s) {
+        const span = ctx.state.traceSpans.get(s);
+        if (span) return span;
+      }
+    }
+    return resolveSpanForSource(ctx, sourceEvent);
   };
 
   const linkMessage = function* (
     messageId: string | undefined,
     role?: string,
-    spanId?: string,
+    ownerSpan?: ActiveTraceSpan | null,
   ): Generator<BaseEvent> {
-    const span = resolveSpan(spanId);
-    if (!messageId || ctx.state.linkedTraceMessages.has(messageId) || !span) {
+    if (!messageId || !ownerSpan) return;
+    if (ctx.state.linkedTraceMessages.has(messageId)) {
+      // Still (re-)stamp on pass-through events so every downstream copy
+      // carries attribution even if the canonical link was emitted earlier.
+      stampAgentAttribution(event, ownerSpan);
       return;
     }
     ctx.state.linkedTraceMessages.add(messageId);
-    ctx.state.traceMessageOwners.set(messageId, span.spanId);
+    ctx.state.traceMessageOwners.set(messageId, ownerSpan.spanId);
+    stampAgentAttribution(event, ownerSpan);
     yield* emitTraceEvent(ctx, {
       type: "message.link",
       messageId,
-      spanId: span.spanId,
+      spanId: ownerSpan.spanId,
+      agentId: ownerSpan.spanId,
+      agentName: ownerSpan.name,
       ...(role ? { role } : {}),
-      source: buildTraceSource(ctx, span.name, sourceEvent),
+      source: buildTraceSource(ctx, ownerSpan.name, sourceEvent),
     });
   };
 
@@ -246,31 +363,33 @@ export function* emitTraceLinksForEvent(
     opts: {
       toolCallName?: string;
       parentMessageId?: string;
-      spanId?: string;
+      ownerSpan?: ActiveTraceSpan | null;
     } = {},
   ): Generator<BaseEvent> {
-    if (!toolCallId || ctx.state.linkedTraceTools.has(toolCallId)) return;
+    if (!toolCallId) return;
 
-    const ownedSpanId =
-      opts.spanId ??
-      (opts.parentMessageId
-        ? ctx.state.traceMessageOwners.get(opts.parentMessageId)
-        : undefined) ??
-      ctx.state.traceToolOwners.get(toolCallId);
-    const span = resolveSpan(ownedSpanId);
-    if (!span) return;
+    const ownerSpan = opts.ownerSpan ?? null;
+    if (!ownerSpan) return;
+
+    if (ctx.state.linkedTraceTools.has(toolCallId)) {
+      stampAgentAttribution(event, ownerSpan);
+      return;
+    }
 
     ctx.state.linkedTraceTools.add(toolCallId);
-    ctx.state.traceToolOwners.set(toolCallId, span.spanId);
+    ctx.state.traceToolOwners.set(toolCallId, ownerSpan.spanId);
+    stampAgentAttribution(event, ownerSpan);
     yield* emitTraceEvent(ctx, {
       type: "tool.link",
       toolCallId,
-      spanId: span.spanId,
+      spanId: ownerSpan.spanId,
+      agentId: ownerSpan.spanId,
+      agentName: ownerSpan.name,
       ...(opts.toolCallName ? { toolCallName: opts.toolCallName } : {}),
       ...(opts.parentMessageId
         ? { parentMessageId: opts.parentMessageId }
         : {}),
-      source: buildTraceSource(ctx, span.name, sourceEvent),
+      source: buildTraceSource(ctx, ownerSpan.name, sourceEvent),
     });
   };
 
@@ -279,32 +398,65 @@ export function* emitTraceLinksForEvent(
     event.type === EventType.REASONING_START ||
     event.type === EventType.REASONING_MESSAGE_START
   ) {
+    // Prefer the source event's full namespace so parallel branches win over
+    // whichever sub-agent span happens to be "active" right now.
+    const ownerSpan = resolveSpan({
+      messageId: traceEvent.messageId,
+    });
     yield* linkMessage(
       traceEvent.messageId,
       traceEvent.role ?? "assistant",
-      ctx.state.traceMessageOwners.get(traceEvent.messageId ?? ""),
+      ownerSpan,
     );
   }
 
   if (event.type === EventType.TOOL_CALL_START) {
-    const ownerSpanId = traceEvent.parentMessageId
-      ? ctx.state.traceMessageOwners.get(traceEvent.parentMessageId)
-      : undefined;
-    yield* linkMessage(traceEvent.parentMessageId, "assistant", ownerSpanId);
+    // Attribute to the assistant message's owner; parentMessageId is always
+    // produced by the same sub-agent that's about to call the tool.
+    const ownerSpan =
+      resolveSpan({ messageId: traceEvent.parentMessageId }) ??
+      resolveSpan({});
+    yield* linkMessage(traceEvent.parentMessageId, "assistant", ownerSpan);
     yield* linkTool(traceEvent.toolCallId, {
       toolCallName: traceEvent.toolCallName,
       parentMessageId: traceEvent.parentMessageId,
-      spanId: ownerSpanId,
+      ownerSpan,
     });
   }
 
+  // Stamp TOOL_CALL_ARGS / TOOL_CALL_END as they flow through so downstream
+  // consumers don't need to thread parentMessageId themselves.
+  if (
+    event.type === EventType.TOOL_CALL_ARGS ||
+    event.type === EventType.TOOL_CALL_END
+  ) {
+    const ownerSpan =
+      resolveSpan({ toolCallId: traceEvent.toolCallId }) ?? resolveSpan({});
+    if (ownerSpan) stampAgentAttribution(event, ownerSpan);
+  }
+
   if (event.type === EventType.TOOL_CALL_RESULT) {
-    const ownerSpanId = traceEvent.toolCallId
-      ? ctx.state.traceToolOwners.get(traceEvent.toolCallId)
-      : undefined;
-    yield* linkMessage(traceEvent.messageId, "tool", ownerSpanId);
+    const ownerSpan =
+      resolveSpan({ toolCallId: traceEvent.toolCallId }) ?? resolveSpan({});
+    yield* linkMessage(traceEvent.messageId, "tool", ownerSpan);
     yield* linkTool(traceEvent.toolCallId, {
-      spanId: ownerSpanId,
+      ownerSpan,
     });
+  }
+
+  // For TEXT_MESSAGE_CONTENT / TEXT_MESSAGE_END / REASONING_* follow-ups,
+  // stamp attribution as well so every chunk of the same logical message
+  // carries its agentId.
+  if (
+    event.type === EventType.TEXT_MESSAGE_CONTENT ||
+    event.type === EventType.TEXT_MESSAGE_END ||
+    event.type === EventType.REASONING_END ||
+    event.type === EventType.REASONING_MESSAGE_CONTENT ||
+    event.type === EventType.REASONING_MESSAGE_END ||
+    event.type === EventType.REASONING_MESSAGE_CHUNK
+  ) {
+    const ownerSpan =
+      resolveSpan({ messageId: traceEvent.messageId }) ?? resolveSpan({});
+    if (ownerSpan) stampAgentAttribution(event, ownerSpan);
   }
 }
