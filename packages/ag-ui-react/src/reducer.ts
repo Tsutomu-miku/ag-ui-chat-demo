@@ -19,7 +19,13 @@ function ensureAssistantMessage(
   metadata: Partial<
     Pick<
       ChatMessage,
-      "stepId" | "parentStepId" | "stepKind" | "stepName" | "parentStepName"
+      | "stepId"
+      | "parentStepId"
+      | "stepKind"
+      | "stepName"
+      | "parentStepName"
+      | "agentId"
+      | "agentName"
     >
   > = {},
 ): ChatMessage[] {
@@ -36,6 +42,8 @@ function ensureAssistantMessage(
             stepKind: m.stepKind ?? metadata.stepKind,
             stepName: m.stepName ?? metadata.stepName,
             parentStepName: m.parentStepName ?? metadata.parentStepName,
+            agentId: m.agentId ?? metadata.agentId,
+            agentName: m.agentName ?? metadata.agentName,
           }
         : m,
     );
@@ -62,7 +70,13 @@ function ensureToolResultMessage(
   metadata: Partial<
     Pick<
       ChatMessage,
-      "stepId" | "parentStepId" | "stepKind" | "stepName" | "parentStepName"
+      | "stepId"
+      | "parentStepId"
+      | "stepKind"
+      | "stepName"
+      | "parentStepName"
+      | "agentId"
+      | "agentName"
     >
   > = {},
 ): ChatMessage[] {
@@ -80,6 +94,8 @@ function ensureToolResultMessage(
             stepKind: m.stepKind ?? metadata.stepKind,
             stepName: m.stepName ?? metadata.stepName,
             parentStepName: m.parentStepName ?? metadata.parentStepName,
+            agentId: m.agentId ?? metadata.agentId,
+            agentName: m.agentName ?? metadata.agentName,
           }
         : m,
     );
@@ -172,10 +188,15 @@ export function updateMessagesWithAgentEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        agentId: event.agentId,
+        agentName: event.agentName,
       });
 
     case "assistant_delta":
-      return ensureAssistantMessage(messages, event.messageId).map((m) =>
+      return ensureAssistantMessage(messages, event.messageId, {
+        agentId: event.agentId,
+        agentName: event.agentName,
+      }).map((m) =>
         m.id === event.messageId
           ? {
               ...m,
@@ -197,6 +218,8 @@ export function updateMessagesWithAgentEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        agentId: event.agentId,
+        agentName: event.agentName,
       }).map((m) => {
         if (m.id !== event.parentMessageId) return m;
         // Don't add duplicate tool call
@@ -219,6 +242,8 @@ export function updateMessagesWithAgentEvent(
               stepKind: event.stepKind,
               stepName: event.stepName,
               parentStepName: event.parentStepName,
+              agentId: event.agentId,
+              agentName: event.agentName,
             },
           ],
         };
@@ -268,6 +293,8 @@ export function updateMessagesWithAgentEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        agentId: event.agentId,
+        agentName: event.agentName,
       });
 
     case "tool_result_delta":
@@ -304,6 +331,8 @@ export function updateMessagesWithAgentEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        agentId: event.agentId,
+        agentName: event.agentName,
       }).map((m) =>
         m.id === event.messageId
           ? {
@@ -315,7 +344,10 @@ export function updateMessagesWithAgentEvent(
       );
 
     case "reasoning_delta":
-      return ensureAssistantMessage(messages, event.messageId).map((m) =>
+      return ensureAssistantMessage(messages, event.messageId, {
+        agentId: event.agentId,
+        agentName: event.agentName,
+      }).map((m) =>
         m.id === event.messageId
           ? {
               ...m,

@@ -27,6 +27,8 @@ function storedMessageToMessage(message: StoredMessage): Message | null {
         ...(message.parentStepName
           ? { parentStepName: message.parentStepName }
           : {}),
+        ...(message.agentId ? { agentId: message.agentId } : {}),
+        ...(message.agentName ? { agentName: message.agentName } : {}),
       };
     case "tool":
       if (!message.toolCallId) return null;
@@ -43,6 +45,8 @@ function storedMessageToMessage(message: StoredMessage): Message | null {
         ...(message.parentStepName
           ? { parentStepName: message.parentStepName }
           : {}),
+        ...(message.agentId ? { agentId: message.agentId } : {}),
+        ...(message.agentName ? { agentName: message.agentName } : {}),
       };
   }
 }

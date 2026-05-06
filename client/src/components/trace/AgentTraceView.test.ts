@@ -239,10 +239,10 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-researcher-1",
+          agentId: "agent-researcher-1",
           agentName: "researcher",
           kind: "subagent",
-          parentAgentId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
         },
       },
       {
@@ -250,12 +250,12 @@ describe("AgentTraceView ordering", () => {
         toolCallId: "tool-search-1",
         toolCallName: "search_web",
         messageId: "tool-result-1",
-        agentId: "span-researcher-1",
+        agentId: "agent-researcher-1",
         agentName: "researcher",
       } as TraceEvent & { agentId: string; agentName: string },
     ];
     const traceData = buildAgentTraceData(messages, [], traceEvents);
-    const researcher = traceData?.nodes["span-researcher-1"];
+    const researcher = traceData?.nodes["agent-researcher-1"];
 
     const renderItems = buildAgentRenderItems(
       researcher!,
@@ -419,7 +419,7 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-supervisor-1",
+          agentId: "agent-supervisor-1",
           agentName: "supervisor",
           kind: "supervisor",
         },
@@ -427,7 +427,7 @@ describe("AgentTraceView ordering", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-supervisor-1",
-        agentId: "span-supervisor-1",
+        agentId: "agent-supervisor-1",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -435,7 +435,7 @@ describe("AgentTraceView ordering", () => {
         toolCallId: "tool-transfer-writer",
         toolCallName: "transfer_to_writer",
         parentMessageId: "assistant-supervisor-1",
-        agentId: "span-supervisor-1",
+        agentId: "agent-supervisor-1",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -444,27 +444,27 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-writer-1",
+          agentId: "agent-writer-1",
           agentName: "writer",
           kind: "subagent",
-          parentAgentId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
         },
       },
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-writer-1",
-        agentId: "span-writer-1",
+        agentId: "agent-writer-1",
         agentName: "writer",
       } as TraceEvent & { agentId: string; agentName: string },
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-supervisor-2",
-        agentId: "span-supervisor-1",
+        agentId: "agent-supervisor-1",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
     ];
     const traceData = buildAgentTraceData(messages, [], traceEvents);
-    const supervisor = traceData?.nodes["span-supervisor-1"];
+    const supervisor = traceData?.nodes["agent-supervisor-1"];
 
     const renderItems = buildAgentRenderItems(
       supervisor!,
@@ -482,7 +482,7 @@ describe("AgentTraceView ordering", () => {
       ),
     ).toEqual([
       "assistant-supervisor-1",
-      'child:span-writer-1:{"task":"draft"}',
+      'child:agent-writer-1:{"task":"draft"}',
       "assistant-supervisor-2",
     ]);
   });
@@ -512,7 +512,7 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-supervisor-1",
+          agentId: "agent-supervisor-1",
           agentName: "supervisor",
           kind: "supervisor",
         },
@@ -520,7 +520,7 @@ describe("AgentTraceView ordering", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-supervisor-1",
-        agentId: "span-supervisor-1",
+        agentId: "agent-supervisor-1",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -528,7 +528,7 @@ describe("AgentTraceView ordering", () => {
         toolCallId: "tool-transfer-writer",
         toolCallName: "transfer_to_writer",
         parentMessageId: "assistant-supervisor-1",
-        agentId: "span-supervisor-1",
+        agentId: "agent-supervisor-1",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -537,16 +537,16 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-writer-1",
+          agentId: "agent-writer-1",
           agentName: "writer",
           kind: "subagent",
-          parentAgentId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
         },
       },
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-writer-1",
-        agentId: "span-writer-1",
+        agentId: "agent-writer-1",
         agentName: "writer",
       } as TraceEvent & { agentId: string; agentName: string },
     ];
@@ -628,7 +628,7 @@ describe("AgentTraceView ordering", () => {
     expect(markup).not.toContain("Delegated branch");
   });
 
-  it("merges supervisor continuation spans into the same parent sequence", () => {
+  it("merges supervisor continuation entries into the same parent sequence", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-supervisor-1", "Routing to writer"),
@@ -657,7 +657,7 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-supervisor-1",
+          agentId: "agent-supervisor-1",
           agentName: "supervisor",
           kind: "supervisor",
         },
@@ -665,7 +665,7 @@ describe("AgentTraceView ordering", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-supervisor-1",
-        agentId: "span-supervisor-1",
+        agentId: "agent-supervisor-1",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -673,7 +673,7 @@ describe("AgentTraceView ordering", () => {
         toolCallId: "tool-transfer-writer",
         toolCallName: "transfer_to_writer",
         parentMessageId: "assistant-supervisor-1",
-        agentId: "span-supervisor-1",
+        agentId: "agent-supervisor-1",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -682,7 +682,7 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.end",
-          agentId: "span-supervisor-1",
+          agentId: "agent-supervisor-1",
         },
       },
       {
@@ -691,16 +691,16 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-writer-1",
+          agentId: "agent-writer-1",
           agentName: "writer",
           kind: "subagent",
-          parentAgentId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
         },
       },
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-writer-1",
-        agentId: "span-writer-1",
+        agentId: "agent-writer-1",
         agentName: "writer",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -709,7 +709,7 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-supervisor-2",
+          agentId: "agent-supervisor-2",
           agentName: "supervisor",
           kind: "supervisor",
         },
@@ -717,14 +717,14 @@ describe("AgentTraceView ordering", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-supervisor-2",
-        agentId: "span-supervisor-2",
+        agentId: "agent-supervisor-2",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
     ];
     const traceData = buildAgentTraceData(messages, [], traceEvents);
-    const supervisor = traceData?.nodes["span-supervisor-1"];
+    const supervisor = traceData?.nodes["agent-supervisor-1"];
 
-    expect(traceData?.roots).toEqual(["span-supervisor-1"]);
+    expect(traceData?.roots).toEqual(["agent-supervisor-1"]);
 
     const renderItems = buildAgentRenderItems(
       supervisor!,
@@ -742,7 +742,7 @@ describe("AgentTraceView ordering", () => {
       ),
     ).toEqual([
       "assistant-supervisor-1",
-      'child:span-writer-1:{"task":"draft"}',
+      'child:agent-writer-1:{"task":"draft"}',
       "assistant-supervisor-2",
     ]);
   });
@@ -766,7 +766,7 @@ describe("AgentTraceView ordering", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-researcher-1",
+          agentId: "agent-researcher-1",
           agentName: "researcher",
           kind: "subagent",
         },
@@ -774,7 +774,7 @@ describe("AgentTraceView ordering", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-researcher-1",
-        agentId: "span-researcher-1",
+        agentId: "agent-researcher-1",
         agentName: "researcher",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -782,18 +782,18 @@ describe("AgentTraceView ordering", () => {
         toolCallId: "tool-search-1",
         toolCallName: "search_web",
         parentMessageId: "assistant-researcher-1",
-        agentId: "span-researcher-1",
+        agentId: "agent-researcher-1",
         agentName: "researcher",
       } as TraceEvent & { agentId: string; agentName: string },
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-researcher-2",
-        agentId: "span-researcher-1",
+        agentId: "agent-researcher-1",
         agentName: "researcher",
       } as TraceEvent & { agentId: string; agentName: string },
     ];
     const traceData = buildAgentTraceData(messages, [], traceEvents);
-    const researcher = traceData?.nodes["span-researcher-1"];
+    const researcher = traceData?.nodes["agent-researcher-1"];
 
     const renderItems = buildAgentRenderItems(
       researcher!,

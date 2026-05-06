@@ -52,6 +52,8 @@ export function AgentTraceView({
         stepKind: message.stepKind,
         stepName: message.stepName,
         parentStepName: message.parentStepName,
+        agentId: message.agentId,
+        agentName: message.agentName,
         toolCalls: (message.toolCalls ?? []).map((toolCall) => ({
           id: toolCall.id,
           name: toolCall.function.name,
@@ -60,6 +62,8 @@ export function AgentTraceView({
           stepKind: toolCall.stepKind,
           stepName: toolCall.stepName,
           parentStepName: toolCall.parentStepName,
+          agentId: toolCall.agentId,
+          agentName: toolCall.agentName,
         })),
       })),
       activeSteps: activeSteps.map((step) => ({
@@ -68,6 +72,8 @@ export function AgentTraceView({
         stepKind: step.stepKind,
         stepName: step.stepName,
         parentStepName: step.parentStepName,
+        agentId: step.agentId,
+        agentName: step.agentName,
       })),
       traceEvents: traceEvents.map((event) => {
         if (event.type === "CUSTOM") {
@@ -88,6 +94,8 @@ export function AgentTraceView({
           stepKind: event.stepKind,
           stepName: event.stepName,
           parentStepName: event.parentStepName,
+          agentId: event.agentId,
+          agentName: event.agentName,
         };
       }),
       traceData: traceData
@@ -114,7 +122,7 @@ export function AgentTraceView({
 
   const activeStepIds = new Set(
     activeSteps
-      .map((step) => step.stepId || step.stepName)
+      .flatMap((step) => [step.stepId, step.agentId, step.stepName])
       .filter((stepId): stepId is string => Boolean(stepId)),
   );
   const renderedAgents = new Set<string>();

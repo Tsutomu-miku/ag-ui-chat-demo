@@ -39,6 +39,8 @@ type PersistableEvent = BaseEvent &
     stepKind: string;
     stepName: string;
     parentStepName: string;
+    agentId: string;
+    agentName: string;
   }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,6 +75,18 @@ function getCustomToolResultPayload(event: PersistableEvent) {
       typeof value.parentStepName === "string"
         ? value.parentStepName
         : undefined,
+    agentId:
+      typeof event.agentId === "string"
+        ? event.agentId
+        : typeof value.agentId === "string"
+          ? value.agentId
+          : undefined,
+    agentName:
+      typeof event.agentName === "string"
+        ? event.agentName
+        : typeof value.agentName === "string"
+          ? value.agentName
+          : undefined,
   };
 }
 
@@ -115,6 +129,8 @@ export function persistHistory(
       stepKind: (message as Partial<StoredMessage>).stepKind,
       stepName: (message as Partial<StoredMessage>).stepName,
       parentStepName: (message as Partial<StoredMessage>).parentStepName,
+      agentId: (message as Partial<StoredMessage>).agentId,
+      agentName: (message as Partial<StoredMessage>).agentName,
       createdAt: new Date().toISOString(),
     };
 
@@ -136,6 +152,8 @@ export function persistHistory(
         stepKind?: string;
         stepName?: string;
         parentStepName?: string;
+        agentId?: string;
+        agentName?: string;
       }
     | undefined;
   const toolResultMessages = new Map<
@@ -156,6 +174,8 @@ export function persistHistory(
     currentAssistant.stepKind ||= event?.stepKind;
     currentAssistant.stepName ||= event?.stepName;
     currentAssistant.parentStepName ||= event?.parentStepName;
+    currentAssistant.agentId ||= event?.agentId;
+    currentAssistant.agentName ||= event?.agentName;
 
     return currentAssistant;
   };
@@ -178,6 +198,8 @@ export function persistHistory(
       stepKind: currentAssistant.stepKind,
       stepName: currentAssistant.stepName,
       parentStepName: currentAssistant.parentStepName,
+      agentId: currentAssistant.agentId,
+      agentName: currentAssistant.agentName,
       createdAt: new Date().toISOString(),
     } satisfies StoredMessage;
 
@@ -213,6 +235,8 @@ export function persistHistory(
           stepKind: existing.stepKind ?? payload.stepKind,
           stepName: existing.stepName ?? payload.stepName,
           parentStepName: existing.parentStepName ?? payload.parentStepName,
+          agentId: existing.agentId ?? payload.agentId,
+          agentName: existing.agentName ?? payload.agentName,
         }
       : {
           id: messageId,
@@ -224,6 +248,8 @@ export function persistHistory(
           stepKind: payload.stepKind,
           stepName: payload.stepName,
           parentStepName: payload.parentStepName,
+          agentId: payload.agentId,
+          agentName: payload.agentName,
           createdAt: new Date().toISOString(),
         };
 
@@ -245,6 +271,8 @@ export function persistHistory(
           stepKind: customToolResult.stepKind,
           stepName: customToolResult.stepName,
           parentStepName: customToolResult.parentStepName,
+          agentId: customToolResult.agentId,
+          agentName: customToolResult.agentName,
         },
       );
 
@@ -283,6 +311,8 @@ export function persistHistory(
           stepKind: event.stepKind,
           stepName: event.stepName,
           parentStepName: event.parentStepName,
+          agentId: event.agentId,
+          agentName: event.agentName,
         });
         currentAssistant?.toolCallArgs.set(event.toolCallId, "");
         break;
@@ -311,6 +341,8 @@ export function persistHistory(
           stepKind: event.stepKind,
           stepName: event.stepName,
           parentStepName: event.parentStepName,
+          agentId: event.agentId,
+          agentName: event.agentName,
         });
         toolMessage.content = event.content || toolMessage.content;
         toolMessage.isStreaming = false;

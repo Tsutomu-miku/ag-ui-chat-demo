@@ -23,6 +23,15 @@ function now() {
   return new Date().toISOString();
 }
 
+function eventAgentMetadata(event: ThreadAgentEvent) {
+  return "agentId" in event
+    ? {
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+        ...(event.agentName ? { agentName: event.agentName } : {}),
+      }
+    : {};
+}
+
 function shouldFlushStreamingEvent(event: ThreadAgentEvent) {
   return (
     event.type === "assistant_start" ||
@@ -59,6 +68,7 @@ function toTraceEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        ...eventAgentMetadata(event),
       };
     case "assistant_delta":
       return {
@@ -66,12 +76,14 @@ function toTraceEvent(
         type: "TEXT_MESSAGE_CONTENT",
         messageId: event.messageId,
         delta: event.delta,
+        ...eventAgentMetadata(event),
       };
     case "assistant_end":
       return {
         ...base,
         type: "TEXT_MESSAGE_END",
         messageId: event.messageId,
+        ...eventAgentMetadata(event),
       };
     case "tool_start":
       return {
@@ -85,6 +97,7 @@ function toTraceEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        ...eventAgentMetadata(event),
       };
     case "tool_args":
       return {
@@ -92,12 +105,14 @@ function toTraceEvent(
         type: "TOOL_CALL_ARGS",
         toolCallId: event.toolCallId,
         delta: event.delta,
+        ...eventAgentMetadata(event),
       };
     case "tool_end":
       return {
         ...base,
         type: "TOOL_CALL_END",
         toolCallId: event.toolCallId,
+        ...eventAgentMetadata(event),
       };
     case "tool_result_start":
       return {
@@ -110,6 +125,7 @@ function toTraceEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        ...eventAgentMetadata(event),
       };
     case "tool_result_delta":
       return {
@@ -118,6 +134,7 @@ function toTraceEvent(
         messageId: event.messageId,
         toolCallId: event.toolCallId,
         delta: event.delta,
+        ...eventAgentMetadata(event),
       };
     case "tool_result_end":
       return {
@@ -125,6 +142,7 @@ function toTraceEvent(
         type: "TOOL_CALL_RESULT_END",
         messageId: event.messageId,
         toolCallId: event.toolCallId,
+        ...eventAgentMetadata(event),
       };
     case "step_started":
       return {
@@ -135,6 +153,7 @@ function toTraceEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        ...eventAgentMetadata(event),
       };
     case "step_finished":
       return {
@@ -145,6 +164,7 @@ function toTraceEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        ...eventAgentMetadata(event),
       };
     case "reasoning_start":
       return {
@@ -156,6 +176,7 @@ function toTraceEvent(
         stepKind: event.stepKind,
         stepName: event.stepName,
         parentStepName: event.parentStepName,
+        ...eventAgentMetadata(event),
       };
     case "reasoning_delta":
       return {
@@ -163,12 +184,14 @@ function toTraceEvent(
         type: "REASONING_MESSAGE_CONTENT",
         messageId: event.messageId,
         delta: event.delta,
+        ...eventAgentMetadata(event),
       };
     case "reasoning_end":
       return {
         ...base,
         type: "REASONING_END",
         messageId: event.messageId,
+        ...eventAgentMetadata(event),
       };
     case "append_message":
       if (event.message.role !== "tool") return null;
@@ -183,6 +206,8 @@ function toTraceEvent(
         stepKind: event.message.stepKind,
         stepName: event.message.stepName,
         parentStepName: event.message.parentStepName,
+        agentId: event.message.agentId,
+        agentName: event.message.agentName,
       };
     case "run_complete":
       return {
@@ -374,7 +399,8 @@ export function useThreads({
           setActiveSteps((prev) => {
             const alreadyTracked = prev.some(
               (step) =>
-                step.stepId === event.stepId ||
+                (event.agentId && step.agentId === event.agentId) ||
+                (event.stepId && step.stepId === event.stepId) ||
                 (!event.stepId &&
                   step.stepName === event.stepName &&
                   step.parentStepName === event.parentStepName),
@@ -389,6 +415,8 @@ export function useThreads({
                 stepKind: event.stepKind,
                 stepName: event.stepName,
                 parentStepName: event.parentStepName,
+                agentId: event.agentId,
+                agentName: event.agentName,
                 startedAt: now(),
               },
             ];
@@ -396,9 +424,11 @@ export function useThreads({
         } else if (event.type === "step_finished") {
           setActiveSteps((prev) =>
             prev.filter((s) =>
-              event.stepId
-                ? s.stepId !== event.stepId
-                : s.stepName !== event.stepName,
+              event.agentId
+                ? s.agentId !== event.agentId
+                : event.stepId
+                  ? s.stepId !== event.stepId
+                  : s.stepName !== event.stepName,
             ),
           );
         } else if (event.type === "run_complete") {
@@ -463,6 +493,8 @@ export function useThreads({
         ...(owner?.parentStepName
           ? { parentStepName: owner.parentStepName }
           : {}),
+        ...(owner?.agentId ? { agentId: owner.agentId } : {}),
+        ...(owner?.agentName ? { agentName: owner.agentName } : {}),
         createdAt: now(),
       };
       handleThreadEvent(threadId, {

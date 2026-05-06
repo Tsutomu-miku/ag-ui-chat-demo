@@ -24,6 +24,8 @@ export interface ToolCallFunction {
   stepKind?: string;
   stepName?: string;
   parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
 }
 
 // ── Chat message ──
@@ -48,6 +50,8 @@ export interface ChatMessage {
   stepKind?: string;
   stepName?: string;
   parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
   createdAt: string;
 }
 
@@ -133,6 +137,8 @@ export interface PendingToolCall {
   stepKind?: string;
   stepName?: string;
   parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
   result?: string;
 }
 
@@ -144,6 +150,8 @@ export interface ActiveStep {
   stepKind?: string;
   stepName: string;
   parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
   startedAt: string;
 }
 
@@ -165,15 +173,21 @@ export type ThreadAgentEvent =
       stepKind?: string;
       stepName?: string;
       parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "assistant_delta";
       messageId: string;
       delta: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "assistant_end";
       messageId: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_start";
@@ -185,15 +199,21 @@ export type ThreadAgentEvent =
       stepKind?: string;
       stepName?: string;
       parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_args";
       toolCallId: string;
       delta: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_end";
       toolCallId: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_result_start";
@@ -204,17 +224,23 @@ export type ThreadAgentEvent =
       stepKind?: string;
       stepName?: string;
       parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_result_delta";
       messageId: string;
       toolCallId: string;
       delta: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_result_end";
       messageId: string;
       toolCallId: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "step_started";
@@ -223,6 +249,8 @@ export type ThreadAgentEvent =
       stepKind?: string;
       stepName: string;
       parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "reasoning_start";
@@ -232,15 +260,21 @@ export type ThreadAgentEvent =
       stepKind?: string;
       stepName?: string;
       parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "reasoning_delta";
       messageId: string;
       delta: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "reasoning_end";
       messageId: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "step_finished";
@@ -249,6 +283,8 @@ export type ThreadAgentEvent =
       stepKind?: string;
       stepName: string;
       parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "run_complete";

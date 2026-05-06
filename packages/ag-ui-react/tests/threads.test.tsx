@@ -214,6 +214,8 @@ describe("useThreads", () => {
         stepKind: "subagent",
         stepName: "researcher",
         parentStepName: "supervisor",
+        agentId: "agent-researcher-1",
+        agentName: "researcher",
       });
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "assistant_start",
@@ -223,6 +225,8 @@ describe("useThreads", () => {
         stepKind: "subagent",
         stepName: "researcher",
         parentStepName: "supervisor",
+        agentId: "agent-researcher-1",
+        agentName: "researcher",
       });
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "assistant_delta",
@@ -237,6 +241,8 @@ describe("useThreads", () => {
         stepId: "step-researcher-1",
         parentStepId: "step-supervisor-1",
         stepKind: "subagent",
+        agentId: "agent-researcher-1",
+        agentName: "researcher",
       });
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "tool_end",
@@ -251,6 +257,8 @@ describe("useThreads", () => {
         stepKind: "subagent",
         stepName: "researcher",
         parentStepName: "supervisor",
+        agentId: "agent-researcher-1",
+        agentName: "researcher",
       });
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "tool_result_delta",
@@ -283,6 +291,8 @@ describe("useThreads", () => {
         stepKind: "subagent",
         stepName: "researcher",
         parentStepName: "supervisor",
+        agentId: "agent-researcher-1",
+        agentName: "researcher",
       }),
     ]);
     expect(hook.result.current.active?.messages[0]).toMatchObject({
@@ -294,6 +304,8 @@ describe("useThreads", () => {
       stepId: "step-researcher-1",
       parentStepId: "step-supervisor-1",
       stepKind: "subagent",
+      agentId: "agent-researcher-1",
+      agentName: "researcher",
       toolCalls: [
         {
           id: "tool-1",
@@ -302,6 +314,8 @@ describe("useThreads", () => {
             arguments: "",
           },
           complete: true,
+          agentId: "agent-researcher-1",
+          agentName: "researcher",
         },
       ],
     });
@@ -316,16 +330,22 @@ describe("useThreads", () => {
           type: "TEXT_MESSAGE_START",
           messageId: "assistant-1",
           stepId: "step-researcher-1",
+          agentId: "agent-researcher-1",
+          agentName: "researcher",
         }),
         expect.objectContaining({
           type: "TOOL_CALL_START",
           toolCallId: "tool-1",
           stepId: "step-researcher-1",
+          agentId: "agent-researcher-1",
+          agentName: "researcher",
         }),
         expect.objectContaining({
           type: "TOOL_CALL_RESULT_START",
           toolCallId: "tool-1",
           messageId: "tool-message-stream-1",
+          agentId: "agent-researcher-1",
+          agentName: "researcher",
         }),
         expect.objectContaining({
           type: "TOOL_CALL_RESULT_CHUNK",

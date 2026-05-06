@@ -11,6 +11,8 @@ export type StoredToolCall = ToolCall &
     stepKind: string;
     stepName: string;
     parentStepName: string;
+    agentId: string;
+    agentName: string;
   }>;
 
 export interface StoredMessage {
@@ -24,6 +26,8 @@ export interface StoredMessage {
   stepKind?: string;
   stepName?: string;
   parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
   createdAt: string;
 }
 
@@ -46,6 +50,8 @@ export interface StoredTraceEvent {
   stepKind?: string;
   stepName?: string;
   parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
 }
 
 export interface ChatThread {

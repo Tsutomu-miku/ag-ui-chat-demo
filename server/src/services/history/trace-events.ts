@@ -24,6 +24,8 @@ type PersistableTraceEvent = BaseEvent &
     stepKind: string;
     stepName: string;
     parentStepName: string;
+    agentId: string;
+    agentName: string;
   }>;
 
 const TRACE_EVENT_TYPES = new Set<string>([
@@ -103,5 +105,7 @@ export function toStoredTraceEvents(
       ...(event.stepKind ? { stepKind: event.stepKind } : {}),
       ...(event.stepName ? { stepName: event.stepName } : {}),
       ...(event.parentStepName ? { parentStepName: event.parentStepName } : {}),
+      ...(event.agentId ? { agentId: event.agentId } : {}),
+      ...(event.agentName ? { agentName: event.agentName } : {}),
     }));
 }

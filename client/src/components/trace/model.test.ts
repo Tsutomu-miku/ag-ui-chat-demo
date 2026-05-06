@@ -392,7 +392,7 @@ describe("trace model", () => {
     ).toEqual(["assistant-writer-2"]);
   });
 
-  it("builds an agent tree from canonical ag-ui.trace span events and in-band attribution", () => {
+  it("builds an agent tree from canonical ag-ui.trace lifecycle events and in-band attribution", () => {
     const messages: ChatMessage[] = [
       assistantMessage("assistant-supervisor", "Routing to writer"),
       {
@@ -417,7 +417,7 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-supervisor-1",
+          agentId: "agent-supervisor-1",
           agentName: "supervisor",
           kind: "supervisor",
         },
@@ -425,7 +425,7 @@ describe("trace model", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-supervisor",
-        agentId: "span-supervisor-1",
+        agentId: "agent-supervisor-1",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -434,23 +434,23 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-writer-1",
+          agentId: "agent-writer-1",
           agentName: "writer",
           kind: "subagent",
-          parentAgentId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
         },
       },
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-writer",
-        agentId: "span-writer-1",
+        agentId: "agent-writer-1",
         agentName: "writer",
       } as TraceEvent & { agentId: string; agentName: string },
       {
         type: "TOOL_CALL_START",
         toolCallId: "tool-calc",
         parentMessageId: "assistant-writer",
-        agentId: "span-writer-1",
+        agentId: "agent-writer-1",
         agentName: "writer",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -459,7 +459,7 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.end",
-          agentId: "span-writer-1",
+          agentId: "agent-writer-1",
         },
       },
     ];
@@ -467,17 +467,17 @@ describe("trace model", () => {
     const traceData = buildAgentTraceData(messages, [], traceEvents);
 
     expect(getTraceMode(messages, [], traceEvents)).toBe("agent");
-    expect(traceData?.roots).toEqual(["span-supervisor-1"]);
-    expect(traceData?.nodes["span-supervisor-1"]?.childStepIds).toEqual([
-      "span-writer-1",
+    expect(traceData?.roots).toEqual(["agent-supervisor-1"]);
+    expect(traceData?.nodes["agent-supervisor-1"]?.childStepIds).toEqual([
+      "agent-writer-1",
     ]);
     expect(
-      traceData?.nodes["span-writer-1"]?.messages.map((message) => message.id),
+      traceData?.nodes["agent-writer-1"]?.messages.map((message) => message.id),
     ).toEqual(["assistant-writer"]);
-    expect(traceData?.nodes["span-writer-1"]?.active).toBe(false);
+    expect(traceData?.nodes["agent-writer-1"]?.active).toBe(false);
   });
 
-  it("merges canonical sub-agent spans that share the same checkpoint namespace root", () => {
+  it("merges canonical sub-agent entries that share the same checkpoint namespace root", () => {
     const messages: ChatMessage[] = [
       assistantMessage("assistant-supervisor-1", "Route to writer"),
       assistantMessage("assistant-writer-1", "Writer planning"),
@@ -491,7 +491,7 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-supervisor-1",
+          agentId: "agent-supervisor-1",
           agentName: "supervisor",
           kind: "supervisor",
           source: {
@@ -502,7 +502,7 @@ describe("trace model", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-supervisor-1",
-        agentId: "span-supervisor-1",
+        agentId: "agent-supervisor-1",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -511,10 +511,10 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-writer-physical-1",
+          agentId: "agent-writer-physical-1",
           agentName: "writer",
           kind: "subagent",
-          parentAgentId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
           source: {
             checkpointNamespace: "writer:subgraph-1|agent:1",
           },
@@ -523,7 +523,7 @@ describe("trace model", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-writer-1",
-        agentId: "span-writer-physical-1",
+        agentId: "agent-writer-physical-1",
         agentName: "writer",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -532,7 +532,7 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.end",
-          agentId: "span-writer-physical-1",
+          agentId: "agent-writer-physical-1",
         },
       },
       {
@@ -541,7 +541,7 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-supervisor-2",
+          agentId: "agent-supervisor-2",
           agentName: "supervisor",
           kind: "supervisor",
           source: {
@@ -552,7 +552,7 @@ describe("trace model", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-supervisor-2",
-        agentId: "span-supervisor-2",
+        agentId: "agent-supervisor-2",
         agentName: "supervisor",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -561,10 +561,10 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-writer-physical-2",
+          agentId: "agent-writer-physical-2",
           agentName: "writer",
           kind: "subagent",
-          parentAgentId: "span-supervisor-2",
+          parentAgentId: "agent-supervisor-2",
           source: {
             checkpointNamespace: "writer:subgraph-1|agent:2",
           },
@@ -573,7 +573,7 @@ describe("trace model", () => {
       {
         type: "TEXT_MESSAGE_START",
         messageId: "assistant-writer-2",
-        agentId: "span-writer-physical-2",
+        agentId: "agent-writer-physical-2",
         agentName: "writer",
       } as TraceEvent & { agentId: string; agentName: string },
       {
@@ -582,22 +582,22 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.end",
-          agentId: "span-writer-physical-2",
+          agentId: "agent-writer-physical-2",
         },
       },
     ];
 
     const traceData = buildAgentTraceData(messages, [], traceEvents);
 
-    expect(traceData?.nodes["span-supervisor-1"]?.childStepIds).toEqual([
-      "span-writer-physical-1",
+    expect(traceData?.nodes["agent-supervisor-1"]?.childStepIds).toEqual([
+      "agent-writer-physical-1",
     ]);
     expect(
-      traceData?.nodes["span-writer-physical-1"]?.messages.map(
+      traceData?.nodes["agent-writer-physical-1"]?.messages.map(
         (message) => message.id,
       ),
     ).toEqual(["assistant-writer-1", "assistant-writer-2"]);
-    expect(traceData?.nodes["span-writer-physical-2"]).toBeUndefined();
+    expect(traceData?.nodes["agent-writer-physical-2"]).toBeUndefined();
   });
 
   it("keeps multiple canonical roots in their first trace order", () => {
@@ -608,7 +608,7 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-writer-1",
+          agentId: "agent-writer-1",
           agentName: "writer",
           kind: "subagent",
         },
@@ -619,7 +619,7 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-supervisor-1",
+          agentId: "agent-supervisor-1",
           agentName: "supervisor",
           kind: "supervisor",
         },
@@ -628,7 +628,7 @@ describe("trace model", () => {
 
     const traceData = buildAgentTraceData([], [], traceEvents);
 
-    expect(traceData?.roots).toEqual(["span-writer-1", "span-supervisor-1"]);
+    expect(traceData?.roots).toEqual(["agent-writer-1", "agent-supervisor-1"]);
   });
 
   it("keeps only latest unlinked canonical lifecycle events for an empty live turn", () => {
@@ -640,7 +640,7 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-old",
+          agentId: "agent-old",
           agentName: "supervisor",
           kind: "supervisor",
         },
@@ -653,7 +653,7 @@ describe("trace model", () => {
         value: {
           version: 2,
           type: "span.start",
-          agentId: "span-new",
+          agentId: "agent-new",
           agentName: "supervisor",
           kind: "supervisor",
         },

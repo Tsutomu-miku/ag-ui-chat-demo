@@ -236,6 +236,8 @@ describe("useAgentChat", () => {
           stepKind: "subagent",
           stepName: "researcher",
           parentStepName: "supervisor",
+          agentId: "agent-researcher-1",
+          agentName: "researcher",
         } satisfies ThreadAgentEvent,
       ],
       [
@@ -355,7 +357,7 @@ describe("useAgentChat", () => {
             event: {
               toolCallId: "tool-2",
               toolCallName: "confirm_action",
-              stepId: "span-supervisor-1",
+              stepId: "agent-supervisor-1",
               stepKind: "supervisor",
               stepName: "supervisor",
             },
@@ -363,7 +365,7 @@ describe("useAgentChat", () => {
           subscriber.onToolCallEndEvent({
             event: {
               toolCallId: "tool-2",
-              stepId: "span-supervisor-1",
+              stepId: "agent-supervisor-1",
               stepKind: "supervisor",
               stepName: "supervisor",
             },
@@ -427,7 +429,7 @@ describe("useAgentChat", () => {
         role: "tool",
         content: '{"approved":true}',
         toolCallId: "tool-2",
-        stepId: "span-supervisor-1",
+        stepId: "agent-supervisor-1",
         stepKind: "supervisor",
         stepName: "supervisor",
       },

@@ -31,6 +31,8 @@ type EventStepMetadata = Partial<{
   stepKind: string;
   stepName: string;
   parentStepName: string;
+  agentId: string;
+  agentName: string;
 }>;
 
 function getEventStepMetadata(event: unknown): EventStepMetadata {
@@ -41,6 +43,16 @@ function getEventStepMetadata(event: unknown): EventStepMetadata {
     ...(item.stepKind ? { stepKind: item.stepKind } : {}),
     ...(item.stepName ? { stepName: item.stepName } : {}),
     ...(item.parentStepName ? { parentStepName: item.parentStepName } : {}),
+    ...(item.agentId ? { agentId: item.agentId } : {}),
+    ...(item.agentName ? { agentName: item.agentName } : {}),
+  };
+}
+
+function getEventAgentMetadata(event: unknown): EventStepMetadata {
+  const item = event as EventStepMetadata;
+  return {
+    ...(item.agentId ? { agentId: item.agentId } : {}),
+    ...(item.agentName ? { agentName: item.agentName } : {}),
   };
 }
 
@@ -65,6 +77,7 @@ function getToolResultEventPayload(
       ? { toolCallId: value.toolCallId }
       : {}),
     ...(typeof value.delta === "string" ? { delta: value.delta } : {}),
+    ...getEventStepMetadata(event),
     ...getEventStepMetadata(value),
   };
 }
@@ -192,6 +205,8 @@ export function useAgentChat({
         ...(m.stepKind ? { stepKind: m.stepKind } : {}),
         ...(m.stepName ? { stepName: m.stepName } : {}),
         ...(m.parentStepName ? { parentStepName: m.parentStepName } : {}),
+        ...(m.agentId ? { agentId: m.agentId } : {}),
+        ...(m.agentName ? { agentName: m.agentName } : {}),
       })) as never[];
 
       const subscriber: AgentSubscriber = {
@@ -209,6 +224,7 @@ export function useAgentChat({
             type: "assistant_delta",
             messageId: event.messageId,
             delta: event.delta,
+            ...getEventAgentMetadata(event),
           });
         },
 
@@ -216,6 +232,7 @@ export function useAgentChat({
           emitThreadEvent(threadId, {
             type: "assistant_end",
             messageId: event.messageId,
+            ...getEventAgentMetadata(event),
           });
         },
 
@@ -242,6 +259,7 @@ export function useAgentChat({
             type: "tool_args",
             toolCallId: event.toolCallId,
             delta: event.delta,
+            ...getEventAgentMetadata(event),
           });
         },
 
@@ -249,6 +267,7 @@ export function useAgentChat({
           emitThreadEvent(threadId, {
             type: "tool_end",
             toolCallId: event.toolCallId,
+            ...getEventAgentMetadata(event),
           });
 
           if (frontendToolNames.has(toolCallName)) {
@@ -323,6 +342,7 @@ export function useAgentChat({
             type: "reasoning_delta",
             messageId,
             delta,
+            ...getEventAgentMetadata(event),
           });
         },
 
@@ -335,6 +355,7 @@ export function useAgentChat({
           emitThreadEvent(threadId, {
             type: "reasoning_end",
             messageId,
+            ...getEventAgentMetadata(event),
           });
         },
 
@@ -355,11 +376,17 @@ export function useAgentChat({
               type: "tool_result_start",
               messageId: payload.messageId,
               toolCallId: payload.toolCallId,
-              stepId: payload.stepId,
-              parentStepId: payload.parentStepId,
-              stepKind: payload.stepKind,
-              stepName: payload.stepName,
-              parentStepName: payload.parentStepName,
+              ...(payload.stepId ? { stepId: payload.stepId } : {}),
+              ...(payload.parentStepId
+                ? { parentStepId: payload.parentStepId }
+                : {}),
+              ...(payload.stepKind ? { stepKind: payload.stepKind } : {}),
+              ...(payload.stepName ? { stepName: payload.stepName } : {}),
+              ...(payload.parentStepName
+                ? { parentStepName: payload.parentStepName }
+                : {}),
+              ...(payload.agentId ? { agentId: payload.agentId } : {}),
+              ...(payload.agentName ? { agentName: payload.agentName } : {}),
             });
             return;
           }
@@ -372,6 +399,8 @@ export function useAgentChat({
               messageId: payload.messageId,
               toolCallId: payload.toolCallId,
               delta: payload.delta,
+              ...(payload.agentId ? { agentId: payload.agentId } : {}),
+              ...(payload.agentName ? { agentName: payload.agentName } : {}),
             });
             return;
           }
@@ -383,6 +412,8 @@ export function useAgentChat({
               type: "tool_result_end",
               messageId: payload.messageId,
               toolCallId: payload.toolCallId,
+              ...(payload.agentId ? { agentId: payload.agentId } : {}),
+              ...(payload.agentName ? { agentName: payload.agentName } : {}),
             });
             return;
           }
@@ -459,6 +490,8 @@ export function useAgentChat({
             ...(pending.parentStepName
               ? { parentStepName: pending.parentStepName }
               : {}),
+            ...(pending.agentId ? { agentId: pending.agentId } : {}),
+            ...(pending.agentName ? { agentName: pending.agentName } : {}),
           }
         : {};
       const toolResultMessage: ChatMessage = {
