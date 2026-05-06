@@ -70,42 +70,28 @@ export interface TraceEvent {
   stepKind?: string;
   stepName?: string;
   parentStepName?: string;
+  /** In-band agent attribution stamped on TEXT_MESSAGE_* / TOOL_CALL_* / REASONING_* events (AG-UI trace protocol v2). */
+  agentId?: string;
+  agentName?: string;
 }
 
 export const AG_UI_TRACE_EVENT_NAME = "ag-ui.trace";
-export const AG_UI_TRACE_PROTOCOL_VERSION = 1;
+export const AG_UI_TRACE_PROTOCOL_VERSION = 2;
 
 export type AgUiTraceEvent =
   | {
       version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
       type: "span.start";
-      spanId: string;
-      name: string;
+      agentId: string;
+      agentName: string;
       kind: string;
-      parentSpanId?: string;
+      parentAgentId?: string;
       source?: Record<string, unknown>;
     }
   | {
       version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
       type: "span.end";
-      spanId: string;
-      source?: Record<string, unknown>;
-    }
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "message.link";
-      messageId: string;
-      spanId: string;
-      role?: string;
-      source?: Record<string, unknown>;
-    }
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "tool.link";
-      toolCallId: string;
-      spanId: string;
-      toolCallName?: string;
-      parentMessageId?: string;
+      agentId: string;
       source?: Record<string, unknown>;
     };
 

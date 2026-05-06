@@ -124,7 +124,7 @@ import {
   emitTraceLinksForEvent as emitTraceLinksForRun,
   finishTraceSpan as finishTraceSpanForRun,
   getTraceNamespaceRoot,
-  nextTraceSpanId as nextTraceSpanIdForRun,
+  nextTraceAgentId as nextTraceAgentIdForRun,
   resetTraceState,
   resolveTraceStepName as resolveTraceStepNameForRun,
   startTraceSpan as startTraceSpanForRun,
@@ -291,8 +291,8 @@ export class LangGraphAgent {
     return classifyTraceStepKindForRun(this.getTraceContext(), stepName);
   }
 
-  protected nextTraceSpanId(stepName: string): string {
-    return nextTraceSpanIdForRun(this.getTraceContext(), stepName);
+  protected nextTraceAgentId(stepName: string): string {
+    return nextTraceAgentIdForRun(this.getTraceContext(), stepName);
   }
 
   protected *emitTraceEvent(
@@ -1062,20 +1062,17 @@ export class LangGraphAgent {
           parentMessageId,
         ),
     })) {
-      // Run trace link emission FIRST so `stampAgentAttribution` can mutate
-      // `agUiEvent` in place (adding `agentId` / `agentName` / `spanId`)
-      // before it is yielded to downstream consumers. We buffer the trace
-      // link events themselves and yield them after the (now-stamped) source
-      // event so the downstream order remains:
-      //   <source event with attribution> → <message.link / tool.link>
-      const traceLinkEvents: BaseEvent[] = [];
-      for (const linkEvent of this.emitTraceLinksForEvent(agUiEvent, event)) {
-        traceLinkEvents.push(linkEvent);
+      // Stamp agent attribution (`agentId` / `agentName`) onto the event
+      // in place BEFORE yielding, so downstream consumers see every event
+      // already carrying its owning sub-agent. The helper is a Generator
+      // for call-site symmetry but emits no events in v2 — the `for` loop
+      // is what drives the in-place mutation.
+      for (const _ of this.emitTraceLinksForEvent(agUiEvent, event)) {
+        // Unreachable in v2 — kept as a safety drain in case future
+        // versions reintroduce out-of-band trace events.
+        yield _;
       }
       yield agUiEvent;
-      for (const linkEvent of traceLinkEvents) {
-        yield linkEvent;
-      }
     }
   }
 }

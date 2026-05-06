@@ -3,7 +3,7 @@ import { EventType, type BaseEvent } from "@ag-ui/core";
 import type { LangGraphStreamEvent, TraceStepKind } from "../types.js";
 
 export const AG_UI_TRACE_EVENT_NAME = "ag-ui.trace";
-export const AG_UI_TRACE_PROTOCOL_VERSION = 1;
+export const AG_UI_TRACE_PROTOCOL_VERSION = 2;
 
 export type AgUiTraceSource = {
   framework: "langgraph";
@@ -13,44 +13,29 @@ export type AgUiTraceSource = {
   checkpointNamespace?: string;
 };
 
+/**
+ * AG-UI trace protocol — span boundaries only.
+ *
+ * Per-event attribution (which agent produced a `TEXT_MESSAGE_*` /
+ * `TOOL_CALL_*` / `REASONING_*` event) is carried directly on the event
+ * itself via `agentId` / `agentName`. We no longer emit `message.link` or
+ * `tool.link` events — they were redundant once attribution travels in-band.
+ */
 export type AgUiTraceEvent =
   | {
       type: "span.start";
-      spanId: string;
-      /** Canonical agent id — equal to `spanId` for the owning agent */
+      /** Canonical agent id for the span. Stable across the whole run. */
       agentId: string;
-      /** Human-readable agent/step name (e.g. "writer", "supervisor") */
+      /** Human-readable agent/step name (e.g. "writer", "supervisor"). */
       agentName: string;
-      name: string;
       kind: TraceStepKind;
-      parentSpanId?: string;
-      /** Parent agent id (supervisor span id for a sub-agent) */
+      /** Parent agent id (supervisor for a sub-agent), if any. */
       parentAgentId?: string;
       source?: AgUiTraceSource;
     }
   | {
       type: "span.end";
-      spanId: string;
       agentId: string;
-      source?: AgUiTraceSource;
-    }
-  | {
-      type: "message.link";
-      messageId: string;
-      spanId: string;
-      agentId: string;
-      agentName: string;
-      role?: string;
-      source?: AgUiTraceSource;
-    }
-  | {
-      type: "tool.link";
-      toolCallId: string;
-      spanId: string;
-      agentId: string;
-      agentName: string;
-      toolCallName?: string;
-      parentMessageId?: string;
       source?: AgUiTraceSource;
     };
 

@@ -104,20 +104,23 @@ Sub-agent hierarchy is emitted as standard AG-UI custom events:
   type: "CUSTOM",
   name: "ag-ui.trace",
   value: {
-    version: 1,
+    version: 2,
     type: "span.start",
-    spanId: "run-1:writer:1",
-    name: "writer",
+    agentId: "run-1:writer:1",
+    agentName: "writer",
     kind: "subagent",
-    parentSpanId: "run-1:supervisor:1"
+    parentAgentId: "run-1:supervisor:1"
   }
 }
 ```
 
-Trace payload types are `span.start`, `span.end`, `message.link`, and
-`tool.link`. Normal AG-UI `TEXT_MESSAGE_*`, `TOOL_CALL_*`, and `STEP_*` events
-remain protocol-compatible; clients should use `CUSTOM name="ag-ui.trace"` as
-the canonical source for parent-child trace rendering.
+Trace payload types are `span.start` and `span.end`. Per-event attribution
+(`agentId` / `agentName`) is stamped in-band on the originating AG-UI events
+(`TEXT_MESSAGE_START`, `TOOL_CALL_START`, `TOOL_CALL_RESULT`, etc.), so clients
+no longer need standalone `message.link` / `tool.link` events. Normal AG-UI
+`TEXT_MESSAGE_*`, `TOOL_CALL_*`, and `STEP_*` events remain protocol-compatible;
+clients should use `CUSTOM name="ag-ui.trace"` as the canonical source for
+parent-child trace rendering.
 
 ## Python Alignment Notes
 

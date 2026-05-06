@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  AG_UI_TRACE_EVENT_NAME,
   type FrontendToolDefinition,
   type ThreadAgentEvent,
 } from "../src/types.js";
@@ -123,19 +122,8 @@ describe("useAgentChat", () => {
             stepKind: "subagent",
             stepName: "researcher",
             parentStepName: "supervisor",
-          },
-        });
-        subscriber.onCustomEvent({
-          event: {
-            type: "CUSTOM",
-            name: AG_UI_TRACE_EVENT_NAME,
-            value: {
-              version: 1,
-              type: "message.link",
-              messageId: "assistant-1",
-              spanId: "span-researcher-1",
-              role: "assistant",
-            },
+            agentId: "agent-researcher-1",
+            agentName: "researcher",
           },
         });
         subscriber.onTextMessageContentEvent({
@@ -248,20 +236,6 @@ describe("useAgentChat", () => {
           stepKind: "subagent",
           stepName: "researcher",
           parentStepName: "supervisor",
-        } satisfies ThreadAgentEvent,
-      ],
-      [
-        "thread-1",
-        {
-          type: "trace_event",
-          name: AG_UI_TRACE_EVENT_NAME,
-          value: {
-            version: 1,
-            type: "message.link",
-            messageId: "assistant-1",
-            spanId: "span-researcher-1",
-            role: "assistant",
-          },
         } satisfies ThreadAgentEvent,
       ],
       [

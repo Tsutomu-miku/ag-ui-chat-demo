@@ -326,20 +326,20 @@ describe("persistHistory", () => {
     const threadId = `thread-${crypto.randomUUID()}`;
 
     persistHistory(threadId, [], [
-      { type: EventType.RUN_STARTED, threadId, runId: "run-trace-v1" },
+      { type: EventType.RUN_STARTED, threadId, runId: "run-trace-v2" },
       {
         type: EventType.CUSTOM,
         name: AG_UI_TRACE_EVENT_NAME,
         value: {
-          version: 1,
+          version: 2,
           type: "span.start",
-          spanId: "span-writer-1",
-          name: "writer",
+          agentId: "agent-writer-1",
+          agentName: "writer",
           kind: "subagent",
-          parentSpanId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
         },
       },
-      { type: EventType.RUN_FINISHED, threadId, runId: "run-trace-v1" },
+      { type: EventType.RUN_FINISHED, threadId, runId: "run-trace-v2" },
     ]);
 
     expect(threadId).toBeTruthy();
@@ -348,10 +348,10 @@ describe("persistHistory", () => {
         expect.objectContaining({
           type: EventType.CUSTOM,
           name: AG_UI_TRACE_EVENT_NAME,
-          runId: "run-trace-v1",
+          runId: "run-trace-v2",
           value: expect.objectContaining({
             type: "span.start",
-            spanId: "span-writer-1",
+            agentId: "agent-writer-1",
           }),
         }),
       ]),

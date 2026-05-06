@@ -267,10 +267,11 @@ describe("useThreads", () => {
         type: "trace_event",
         name: AG_UI_TRACE_EVENT_NAME,
         value: {
-          version: 1,
-          type: "tool.link",
-          toolCallId: "tool-1",
-          spanId: "span-researcher-1",
+          version: 2,
+          type: "span.start",
+          agentId: "agent-researcher-1",
+          agentName: "researcher",
+          kind: "subagent",
         },
       });
     });
@@ -336,9 +337,9 @@ describe("useThreads", () => {
           type: "CUSTOM",
           name: AG_UI_TRACE_EVENT_NAME,
           value: expect.objectContaining({
-            type: "tool.link",
-            toolCallId: "tool-1",
-            spanId: "span-researcher-1",
+            type: "span.start",
+            agentId: "agent-researcher-1",
+            agentName: "researcher",
           }),
         }),
       ]),

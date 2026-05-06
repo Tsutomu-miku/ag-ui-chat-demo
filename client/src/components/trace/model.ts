@@ -101,23 +101,13 @@ function getCanonicalTraceValue(event: TraceEvent): AgUiTraceEvent | null {
 
   switch (event.value.type) {
     case "span.start":
-      return typeof event.value.spanId === "string" &&
-        typeof event.value.name === "string" &&
+      return typeof event.value.agentId === "string" &&
+        typeof event.value.agentName === "string" &&
         typeof event.value.kind === "string"
         ? (event.value as AgUiTraceEvent)
         : null;
     case "span.end":
-      return typeof event.value.spanId === "string"
-        ? (event.value as AgUiTraceEvent)
-        : null;
-    case "message.link":
-      return typeof event.value.spanId === "string" &&
-        typeof event.value.messageId === "string"
-        ? (event.value as AgUiTraceEvent)
-        : null;
-    case "tool.link":
-      return typeof event.value.spanId === "string" &&
-        typeof event.value.toolCallId === "string"
+      return typeof event.value.agentId === "string"
         ? (event.value as AgUiTraceEvent)
         : null;
     default:
@@ -552,29 +542,12 @@ export function filterTraceEventsForTurn(
     ]),
   );
   const stepIds = collectStepIdsFromMessages(messages);
+  const agentIds = new Set<string>();
   const selected = new Set<number>();
 
   for (let index = 0; index < traceEvents.length; index++) {
     const event = traceEvents[index]!;
-    const traceValue = getCanonicalTraceValue(event);
-
-    if (
-      traceValue?.type === "message.link" &&
-      messageIds.has(traceValue.messageId)
-    ) {
-      selected.add(index);
-      stepIds.add(traceValue.spanId);
-      continue;
-    }
-
-    if (
-      traceValue?.type === "tool.link" &&
-      toolCallIds.has(traceValue.toolCallId)
-    ) {
-      selected.add(index);
-      stepIds.add(traceValue.spanId);
-      continue;
-    }
+    const inBandAgentId = (event as TraceEvent & { agentId?: string }).agentId;
 
     if (
       (event.messageId && messageIds.has(event.messageId)) ||
@@ -584,6 +557,7 @@ export function filterTraceEventsForTurn(
       selected.add(index);
       if (event.stepId) stepIds.add(event.stepId);
       if (event.parentStepId) stepIds.add(event.parentStepId);
+      if (inBandAgentId) agentIds.add(inBandAgentId);
     }
   }
 
@@ -594,23 +568,20 @@ export function filterTraceEventsForTurn(
       if (selected.has(index)) continue;
       const event = traceEvents[index]!;
       const traceValue = getCanonicalTraceValue(event);
-      const traceStepId =
-        traceValue?.type === "span.start" ||
-        traceValue?.type === "span.end" ||
-        traceValue?.type === "message.link" ||
-        traceValue?.type === "tool.link"
-          ? traceValue.spanId
+      const traceAgentId =
+        traceValue?.type === "span.start" || traceValue?.type === "span.end"
+          ? traceValue.agentId
           : undefined;
-      const traceParentStepId =
-        traceValue?.type === "span.start" ? traceValue.parentSpanId : undefined;
+      const traceParentAgentId =
+        traceValue?.type === "span.start" ? traceValue.parentAgentId : undefined;
 
       if (
-        (traceStepId && stepIds.has(traceStepId)) ||
-        (traceParentStepId && stepIds.has(traceParentStepId))
+        (traceAgentId && agentIds.has(traceAgentId)) ||
+        (traceParentAgentId && agentIds.has(traceParentAgentId))
       ) {
         selected.add(index);
-        if (traceStepId) stepIds.add(traceStepId);
-        if (traceParentStepId) stepIds.add(traceParentStepId);
+        if (traceAgentId) agentIds.add(traceAgentId);
+        if (traceParentAgentId) agentIds.add(traceParentAgentId);
         changed = true;
         continue;
       }
@@ -622,6 +593,8 @@ export function filterTraceEventsForTurn(
         selected.add(index);
         if (event.stepId) stepIds.add(event.stepId);
         if (event.parentStepId) stepIds.add(event.parentStepId);
+        const eventAgentId = (event as TraceEvent & { agentId?: string }).agentId;
+        if (eventAgentId) agentIds.add(eventAgentId);
         changed = true;
       }
     }
@@ -807,133 +780,153 @@ function buildCanonicalAgentTraceData(
   const toolSpanIds = new Map<
     string,
     {
-      spanId: string;
+      agentId: string;
       traceOrder: number;
       toolCallName?: string;
       parentMessageId?: string;
     }
   >();
 
-  const resolveSpanId = (spanId: string) => spanAliases.get(spanId) ?? spanId;
+  const resolveAgentId = (agentId: string) =>
+    spanAliases.get(agentId) ?? agentId;
 
+  // First pass: process canonical span.start / span.end events to build the
+  // agent tree (and handle supervisor-root/logical-span deduplication).
   for (const [eventIndex, event] of traceEvents.entries()) {
     const traceValue = getCanonicalTraceValue(event);
     if (!traceValue) continue;
 
     if (traceValue.type === "span.start") {
       const namespaceRoot = getCheckpointNamespaceRoot(traceValue);
-      const resolvedParentSpanId = traceValue.parentSpanId
-        ? resolveSpanId(traceValue.parentSpanId)
+      const resolvedParentAgentId = traceValue.parentAgentId
+        ? resolveAgentId(traceValue.parentAgentId)
         : undefined;
       const logicalSpanKey =
         namespaceRoot &&
-        !(traceValue.kind === "supervisor" && !resolvedParentSpanId)
+        !(traceValue.kind === "supervisor" && !resolvedParentAgentId)
           ? [
               traceValue.kind,
-              traceValue.name,
-              resolvedParentSpanId ?? "root",
+              traceValue.agentName,
+              resolvedParentAgentId ?? "root",
               namespaceRoot,
             ].join("|")
           : undefined;
       const existingSupervisorRoot =
-        traceValue.kind === "supervisor" && !resolvedParentSpanId
+        traceValue.kind === "supervisor" && !resolvedParentAgentId
           ? Object.values(nodes).find(
               (node) =>
                 node.stepKind === "supervisor" &&
                 !node.parentStepId &&
-                node.stepName === traceValue.name,
+                node.stepName === traceValue.agentName,
             )
           : undefined;
       const existingLogicalSpanId = logicalSpanKey
         ? logicalSpanIds.get(logicalSpanKey)
         : undefined;
-      const spanId =
+      const agentId =
         existingSupervisorRoot?.stepId ??
         existingLogicalSpanId ??
-        traceValue.spanId;
+        traceValue.agentId;
       if (existingSupervisorRoot) {
-        spanAliases.set(traceValue.spanId, existingSupervisorRoot.stepId);
+        spanAliases.set(traceValue.agentId, existingSupervisorRoot.stepId);
       }
       if (existingLogicalSpanId) {
-        spanAliases.set(traceValue.spanId, existingLogicalSpanId);
+        spanAliases.set(traceValue.agentId, existingLogicalSpanId);
       }
       if (logicalSpanKey && !existingLogicalSpanId) {
-        logicalSpanIds.set(logicalSpanKey, spanId);
+        logicalSpanIds.set(logicalSpanKey, agentId);
       }
-      const parentSpanId = resolvedParentSpanId;
+      const parentAgentId = resolvedParentAgentId;
       const node = ensureTraceNode(
         nodes,
-        spanId,
-        traceValue.name,
+        agentId,
+        traceValue.agentName,
         traceValue.kind,
-        parentSpanId,
+        parentAgentId,
         undefined,
         eventIndex,
       );
       node.active = true;
 
-      if (parentSpanId) {
+      if (parentAgentId) {
         ensureTraceNode(
           nodes,
-          parentSpanId,
-          parentSpanId,
+          parentAgentId,
+          parentAgentId,
           undefined,
           undefined,
           undefined,
           eventIndex,
         );
-        linkParent(nodes, parentSpanId, spanId);
+        linkParent(nodes, parentAgentId, agentId);
       }
     }
 
     if (traceValue.type === "span.end") {
-      const node = nodes[resolveSpanId(traceValue.spanId)];
+      const node = nodes[resolveAgentId(traceValue.agentId)];
       if (node) node.active = false;
     }
+  }
 
-    if (traceValue.type === "message.link") {
-      messageSpanIds.set(
-        traceValue.messageId,
-        resolveSpanId(traceValue.spanId),
-      );
+  // Second pass: derive message→agent / tool→agent attribution from the
+  // `agentId` stamped directly on message/tool events (in-band attribution).
+  for (const [eventIndex, event] of traceEvents.entries()) {
+    const inBandAgentId = (event as TraceEvent & { agentId?: string }).agentId;
+    if (!inBandAgentId) continue;
+    const agentId = resolveAgentId(inBandAgentId);
+
+    if (event.type === "TEXT_MESSAGE_START" && event.messageId) {
+      if (!messageSpanIds.has(event.messageId)) {
+        messageSpanIds.set(event.messageId, agentId);
+      }
     }
 
-    if (traceValue.type === "tool.link") {
-      toolSpanIds.set(traceValue.toolCallId, {
-        spanId: resolveSpanId(traceValue.spanId),
-        traceOrder: eventIndex,
-        ...(traceValue.toolCallName
-          ? { toolCallName: traceValue.toolCallName }
-          : {}),
-        ...(traceValue.parentMessageId
-          ? { parentMessageId: traceValue.parentMessageId }
-          : {}),
-      });
+    if (event.type === "TOOL_CALL_START" && event.toolCallId) {
+      if (!toolSpanIds.has(event.toolCallId)) {
+        toolSpanIds.set(event.toolCallId, {
+          agentId,
+          traceOrder: eventIndex,
+          ...(event.toolCallName ? { toolCallName: event.toolCallName } : {}),
+          ...(event.parentMessageId
+            ? { parentMessageId: event.parentMessageId }
+            : {}),
+        });
+      }
       if (
-        traceValue.parentMessageId &&
-        !messageSpanIds.has(traceValue.parentMessageId)
+        event.parentMessageId &&
+        !messageSpanIds.has(event.parentMessageId)
       ) {
-        messageSpanIds.set(
-          traceValue.parentMessageId,
-          resolveSpanId(traceValue.spanId),
-        );
+        messageSpanIds.set(event.parentMessageId, agentId);
+      }
+    }
+
+    if (event.type === "TOOL_CALL_RESULT") {
+      if (event.toolCallId && !toolSpanIds.has(event.toolCallId)) {
+        toolSpanIds.set(event.toolCallId, {
+          agentId,
+          traceOrder: eventIndex,
+          ...(event.toolCallName ? { toolCallName: event.toolCallName } : {}),
+        });
+      }
+      if (event.messageId && !messageSpanIds.has(event.messageId)) {
+        messageSpanIds.set(event.messageId, agentId);
       }
     }
   }
 
   for (const [messageIndex, message] of messages.entries()) {
-    let spanId = messageSpanIds.get(message.id);
-    if (!spanId && message.role === "assistant") {
-      spanId = (message.toolCalls ?? [])
-        .map((toolCall) => toolSpanIds.get(toolCall.id)?.spanId)
+    let agentId = messageSpanIds.get(message.id);
+    if (!agentId && message.role === "assistant") {
+      agentId = (message.toolCalls ?? [])
+        .map((toolCall) => toolSpanIds.get(toolCall.id)?.agentId)
         .find((item): item is string => Boolean(item));
     }
-    if (!spanId && message.role === "tool" && message.toolCallId) {
-      spanId = toolSpanIds.get(message.toolCallId)?.spanId;
+    if (!agentId && message.role === "tool" && message.toolCallId) {
+      agentId = toolSpanIds.get(message.toolCallId)?.agentId;
     }
 
-    if (spanId && nodes[spanId]) {
-      const node = nodes[spanId]!;
+    if (agentId && nodes[agentId]) {
+      const node = nodes[agentId]!;
       node.messages.push(message);
       node.messageOrders[message.id] = messageIndex;
       if (node.order === undefined || messageIndex < node.order) {
@@ -952,7 +945,7 @@ function buildCanonicalAgentTraceData(
 
     for (const toolCall of message.toolCalls ?? []) {
       const owner = toolSpanIds.get(toolCall.id);
-      const ownerNode = owner ? nodes[owner.spanId] : undefined;
+      const ownerNode = owner ? nodes[owner.agentId] : undefined;
       if (
         ownerNode &&
         !ownerNode.toolCalls.some((item) => item.id === toolCall.id)
@@ -961,13 +954,13 @@ function buildCanonicalAgentTraceData(
       }
       if (ownerNode) {
         ownerNode.toolOrders[toolCall.id] =
-          nodes[spanId ?? ""]?.messageOrders[message.id] ?? messageIndex + 0.01;
+          nodes[agentId ?? ""]?.messageOrders[message.id] ?? messageIndex + 0.01;
       }
     }
   }
 
   for (const [toolCallId, owner] of toolSpanIds) {
-    const node = nodes[owner.spanId];
+    const node = nodes[owner.agentId];
     if (
       !node ||
       node.toolCalls.some((toolCall) => toolCall.id === toolCallId)

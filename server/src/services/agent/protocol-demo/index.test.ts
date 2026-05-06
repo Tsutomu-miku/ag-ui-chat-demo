@@ -63,11 +63,11 @@ describe("protocol demo agent", () => {
         (event) =>
           event.type === "CUSTOM" &&
           event.name === "ag-ui.trace" &&
-          (event.value as { type?: string; name?: string; kind?: string })
+          (event.value as { type?: string; agentName?: string; kind?: string })
             .type === "span.start" &&
-          (event.value as { type?: string; name?: string; kind?: string })
-            .name === "writer" &&
-          (event.value as { type?: string; name?: string; kind?: string })
+          (event.value as { type?: string; agentName?: string; kind?: string })
+            .agentName === "writer" &&
+          (event.value as { type?: string; agentName?: string; kind?: string })
             .kind === "subagent",
       ),
     ).toBe(true);

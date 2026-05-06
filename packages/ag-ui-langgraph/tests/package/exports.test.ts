@@ -46,6 +46,6 @@ describe("trace plugin exports", () => {
 
   it("exports canonical trace protocol constants", () => {
     expect(AG_UI_TRACE_EVENT_NAME).toBe("ag-ui.trace");
-    expect(AG_UI_TRACE_PROTOCOL_VERSION).toBe(1);
+    expect(AG_UI_TRACE_PROTOCOL_VERSION).toBe(2);
   });
 });
