@@ -85,6 +85,19 @@ export {
   DEFAULT_SCHEMA_KEYS,
 } from "./types.js";
 
+export {
+  AG_UI_TRACE_EVENT_NAME,
+  AG_UI_TRACE_PROTOCOL_VERSION,
+  createTraceCustomEvent,
+} from "./trace.js";
+
+export type {
+  AgUiTraceCustomEvent,
+  AgUiTraceCustomValue,
+  AgUiTraceEvent,
+  AgUiTraceSource,
+} from "./trace.js";
+
 // ── Message conversion (aligned with Python utils.py) ──
 export {
   toLangChainMessages,

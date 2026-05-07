@@ -1,36 +1,26 @@
 {
   "name": "ag-ui-langgraph",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "description": "AG-UI protocol adapter for LangGraph \u2014 TypeScript implementation aligned with Python ag-ui-langgraph",
-  "homepage": "https://github.com/Tsutomu-miku/ag-ui-chat-demo#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Tsutomu-miku/ag-ui-chat-demo.git",
-    "directory": "packages/ag-ui-langgraph"
-  },
-  "bugs": {
-    "url": "https://github.com/Tsutomu-miku/ag-ui-chat-demo/issues"
-  },
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
     },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
   "scripts": {
-    "build": "rm -rf dist && tsc",
+    "build": "tsc",
     "prepack": "pnpm run build",
-    "prepublishOnly": "pnpm run typecheck && pnpm run test:coverage && pnpm run build",
+    "prepublishOnly": "pnpm run typecheck && pnpm run test && pnpm run build",
     "publish:check-name": "npm view ag-ui-langgraph version --registry=https://registry.npmjs.org",
-    "publish:dry": "npm pack --dry-run --cache ../../node_modules/.cache/npm/ag-ui-langgraph",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "publish:dry": "pnpm run build && npm pack --dry-run --cache ../../node_modules/.cache/npm/ag-ui-langgraph",
+    "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
@@ -42,11 +32,10 @@
     "uuid": "^11.1.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/uuid": "^10.0.0",
-    "@vitest/coverage-v8": "^3.2.4",
     "typescript": "^5.8.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "@types/node": "^22.0.0",
+    "@types/uuid": "^10.0.0"
   },
   "peerDependencies": {
     "@langchain/core": ">=0.3.0",
@@ -55,8 +44,7 @@
   },
   "files": [
     "dist",
-    "README.md",
-    "LICENSE"
+    "src"
   ],
   "publishConfig": {
     "access": "public"

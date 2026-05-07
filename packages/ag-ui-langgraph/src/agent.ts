@@ -31,10 +31,7 @@ import {
   type RunAgentInput,
   type Tool,
 } from "@ag-ui/core";
-import {
-  HumanMessage,
-  type BaseMessage,
-} from "@langchain/core/messages";
+import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { v4 as uuid } from "uuid";
 
 import {
@@ -102,8 +99,10 @@ import type {
   LangGraphPluginContext,
 } from "./plugins/trace.js";
 import {
-  handleReasoningEvent as handleReasoningEventForRun,
-} from "./agent/reasoning.js";
+  buildTraceOwnerFromSource,
+  type TraceOwnerMetadata,
+} from "./runtime/trace-owner.js";
+import { handleReasoningEvent as handleReasoningEventForRun } from "./agent/reasoning.js";
 import {
   clearMessageInProgress,
   getMessageInProgress as readMessageInProgress,
@@ -277,7 +276,11 @@ export class LangGraphAgent {
     stepName: string,
     sourceEvent?: LangGraphStreamEvent | null,
   ): string {
-    return resolveTraceStepNameForRun(this.getTraceContext(), stepName, sourceEvent);
+    return resolveTraceStepNameForRun(
+      this.getTraceContext(),
+      stepName,
+      sourceEvent,
+    );
   }
 
   protected classifyTraceStepKind(
@@ -301,37 +304,119 @@ export class LangGraphAgent {
     );
   }
 
+  protected getActiveTraceOwner(): TraceOwnerMetadata | undefined {
+    return this.traceState.activeTraceSpan?.owner;
+  }
+
+  protected getOwnerMetadataForEvent(
+    event: BaseEvent &
+      Partial<{
+        messageId: string;
+        parentMessageId: string;
+        toolCallId: string;
+        owner: {
+          key: string;
+        };
+      }>,
+  ): TraceOwnerMetadata | null {
+    const directOwnerKey = event.owner?.key;
+    if (directOwnerKey) {
+      return this.traceState.traceOwners.get(directOwnerKey) ?? null;
+    }
+
+    if (event.toolCallId) {
+      const ownerKey = this.traceState.traceToolOwners.get(event.toolCallId);
+      if (ownerKey) return this.traceState.traceOwners.get(ownerKey) ?? null;
+    }
+
+    if (event.parentMessageId) {
+      const ownerKey = this.traceState.traceMessageOwners.get(
+        event.parentMessageId,
+      );
+      if (ownerKey) return this.traceState.traceOwners.get(ownerKey) ?? null;
+    }
+
+    if (event.messageId) {
+      const ownerKey = this.traceState.traceMessageOwners.get(event.messageId);
+      if (ownerKey) return this.traceState.traceOwners.get(ownerKey) ?? null;
+    }
+
+    return this.getActiveTraceOwner() ?? null;
+  }
+
+  protected attachTraceOwnerToEvent(event: BaseEvent): BaseEvent {
+    const mutable = event as BaseEvent &
+      Partial<{
+        messageId: string;
+        parentMessageId: string;
+        toolCallId: string;
+        owner: {
+          key: string;
+          type: string;
+          instanceId: string;
+          parentKey?: string;
+        };
+      }>;
+    const owner = this.getOwnerMetadataForEvent(mutable);
+    if (!owner) return event;
+
+    mutable.owner ??= {
+      key: owner.key,
+      type: owner.type,
+      instanceId: owner.instanceId,
+      ...(owner.parentKey ? { parentKey: owner.parentKey } : {}),
+    };
+    return mutable;
+  }
+
+  protected *handleTraceOwnerBoundary(
+    currentNodeName: string,
+    sourceEvent: LangGraphStreamEvent,
+  ): Generator<BaseEvent> {
+    const activeSpan = this.traceState.activeTraceSpan;
+    if (!activeSpan) return;
+
+    const nextStepName = this.resolveTraceStepName(
+      currentNodeName,
+      sourceEvent,
+    );
+    if (activeSpan.name !== nextStepName) return;
+
+    const nextOwner = buildTraceOwnerFromSource({
+      runId: this.activeRun?.id,
+      stepName: nextStepName,
+      kind: this.classifyTraceStepKind(nextStepName),
+      event: sourceEvent,
+      owner: activeSpan.owner.parentKey
+        ? { parentKey: activeSpan.owner.parentKey }
+        : undefined,
+    });
+
+    if (nextOwner.key === activeSpan.owner.key) return;
+
+    yield* this.finishTraceSpan(activeSpan.name, sourceEvent);
+    yield* this.startTraceSpan(currentNodeName, sourceEvent);
+  }
+
   protected *startTraceSpan(
     stepName: string,
     sourceEvent?: LangGraphStreamEvent | null,
   ): Generator<BaseEvent> {
-    yield* startTraceSpanForRun(
-      this.getTraceContext(),
-      stepName,
-      sourceEvent,
-    );
+    yield* startTraceSpanForRun(this.getTraceContext(), stepName, sourceEvent);
   }
 
   protected *finishTraceSpan(
     stepName: string,
     sourceEvent?: LangGraphStreamEvent | null,
   ): Generator<BaseEvent> {
-    yield* finishTraceSpanForRun(
-      this.getTraceContext(),
-      stepName,
-      sourceEvent,
-    );
+    yield* finishTraceSpanForRun(this.getTraceContext(), stepName, sourceEvent);
   }
 
   protected *emitTraceLinksForEvent(
     event: BaseEvent,
     sourceEvent?: LangGraphStreamEvent | null,
   ): Generator<BaseEvent> {
-    yield* emitTraceLinksForRun(
-      this.getTraceContext(),
-      event,
-      sourceEvent,
-    );
+    yield* emitTraceLinksForRun(this.getTraceContext(), event, sourceEvent);
   }
 
   // ── Message-in-progress tracking ──
@@ -410,10 +495,7 @@ export class LangGraphAgent {
           stepName: this.activeRun.node_name,
         } as BaseEvent);
         if (ev) yield ev;
-        if (
-          currentTraceAgentId &&
-          currentTraceAgentId !== nextTraceAgentId
-        ) {
+        if (currentTraceAgentId && currentTraceAgentId !== nextTraceAgentId) {
           yield* this.finishTraceSpan(this.activeRun.node_name, sourceEvent);
         }
       }
@@ -915,6 +997,8 @@ export class LangGraphAgent {
           )) {
             yield stepEvent;
           }
+        } else if (currentNodeName) {
+          yield* this.handleTraceOwnerBoundary(currentNodeName, event);
         }
 
         markPredictStateToolIfNeeded(event, this.activeRun);
@@ -1061,17 +1145,9 @@ export class LangGraphAgent {
           parentMessageId,
         ),
     })) {
-      // Stamp agent attribution (`agentId` / `agentName`) onto the event
-      // in place BEFORE yielding, so downstream consumers see every event
-      // already carrying its owning sub-agent. The helper is a Generator
-      // for call-site symmetry but emits no events in v2 — the `for` loop
-      // is what drives the in-place mutation.
-      for (const _ of this.emitTraceLinksForEvent(agUiEvent, event)) {
-        // Unreachable in v2 — kept as a safety drain in case future
-        // versions reintroduce out-of-band trace events.
-        yield _;
-      }
-      yield agUiEvent;
+      const enrichedEvent = this.attachTraceOwnerToEvent(agUiEvent);
+      yield enrichedEvent;
+      yield* this.emitTraceLinksForEvent(enrichedEvent, event);
     }
   }
 }

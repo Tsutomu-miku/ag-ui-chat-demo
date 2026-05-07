@@ -1,8 +1,4 @@
-import {
-  type BaseEvent,
-  EventType,
-  type Message,
-} from "@ag-ui/core";
+import { type BaseEvent, EventType, type Message } from "@ag-ui/core";
 import { v4 as uuid } from "uuid";
 
 import {
@@ -15,7 +11,9 @@ import {
   appendMessages,
   getOrCreateThread,
   type StoredMessage,
+  type StoredOwner,
   type StoredRole,
+  type StoredStep,
   type StoredToolCall,
 } from "./store.js";
 import { createLogger } from "../../config/logger.js";
@@ -34,17 +32,58 @@ type PersistableEvent = BaseEvent &
     toolCallId: string;
     toolCallName: string;
     parentMessageId: string;
-    stepId: string;
-    parentStepId: string;
-    stepKind: string;
-    stepName: string;
-    parentStepName: string;
-    agentId: string;
-    agentName: string;
+    step: StoredStep;
+    owner: StoredOwner;
   }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getStoredStep(value: unknown): StoredStep | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const nested = isRecord(value.step) ? value.step : null;
+  if (!nested) return undefined;
+
+  return {
+    ...(typeof nested.id === "string" ? { id: nested.id } : {}),
+    ...(typeof nested.parentId === "string"
+      ? { parentId: nested.parentId }
+      : {}),
+    ...(typeof nested.kind === "string" ? { kind: nested.kind } : {}),
+    ...(typeof nested.name === "string" ? { name: nested.name } : {}),
+  };
+}
+
+function getStoredOwner(value: unknown): StoredOwner | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const nested = isRecord(value.owner) ? value.owner : null;
+  if (
+    !nested ||
+    typeof nested.key !== "string" ||
+    typeof nested.type !== "string" ||
+    typeof nested.instanceId !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    key: nested.key,
+    type: nested.type,
+    instanceId: nested.instanceId,
+    ...(typeof nested.parentKey === "string"
+      ? { parentKey: nested.parentKey }
+      : {}),
+  };
+}
+
+function getStoredContext(value: unknown) {
+  return {
+    ...(getStoredStep(value) ? { step: getStoredStep(value) } : {}),
+    ...(getStoredOwner(value) ? { owner: getStoredOwner(value) } : {}),
+  };
 }
 
 function getCustomToolResultPayload(event: PersistableEvent) {
@@ -62,31 +101,12 @@ function getCustomToolResultPayload(event: PersistableEvent) {
 
   return {
     eventName: event.name,
-    messageId: typeof value.messageId === "string" ? value.messageId : undefined,
+    messageId:
+      typeof value.messageId === "string" ? value.messageId : undefined,
     toolCallId:
       typeof value.toolCallId === "string" ? value.toolCallId : undefined,
     delta: typeof value.delta === "string" ? value.delta : undefined,
-    stepId: typeof value.stepId === "string" ? value.stepId : undefined,
-    parentStepId:
-      typeof value.parentStepId === "string" ? value.parentStepId : undefined,
-    stepKind: typeof value.stepKind === "string" ? value.stepKind : undefined,
-    stepName: typeof value.stepName === "string" ? value.stepName : undefined,
-    parentStepName:
-      typeof value.parentStepName === "string"
-        ? value.parentStepName
-        : undefined,
-    agentId:
-      typeof event.agentId === "string"
-        ? event.agentId
-        : typeof value.agentId === "string"
-          ? value.agentId
-          : undefined,
-    agentName:
-      typeof event.agentName === "string"
-        ? event.agentName
-        : typeof value.agentName === "string"
-          ? value.agentName
-          : undefined,
+    ...getStoredContext({ ...event, ...value }),
   };
 }
 
@@ -97,7 +117,7 @@ function isStoredRole(role: Message["role"]): role is StoredRole {
 export function persistHistory(
   threadId: string,
   inputMessages: Message[],
-  events: BaseEvent[]
+  events: BaseEvent[],
 ) {
   const thread = getOrCreateThread(threadId);
   const existingIds = new Set(thread.messages.map((message) => message.id));
@@ -124,13 +144,8 @@ export function persistHistory(
       content: messageContentToString(message.content),
       toolCallId: message.role === "tool" ? message.toolCallId : undefined,
       toolCalls: message.role === "assistant" ? message.toolCalls : undefined,
-      stepId: (message as Partial<StoredMessage>).stepId,
-      parentStepId: (message as Partial<StoredMessage>).parentStepId,
-      stepKind: (message as Partial<StoredMessage>).stepKind,
-      stepName: (message as Partial<StoredMessage>).stepName,
-      parentStepName: (message as Partial<StoredMessage>).parentStepName,
-      agentId: (message as Partial<StoredMessage>).agentId,
-      agentName: (message as Partial<StoredMessage>).agentName,
+      step: (message as Partial<StoredMessage>).step,
+      owner: (message as Partial<StoredMessage>).owner,
       createdAt: new Date().toISOString(),
     };
 
@@ -147,13 +162,8 @@ export function persistHistory(
         content: string;
         toolCalls: StoredToolCall[];
         toolCallArgs: Map<string, string>;
-        stepId?: string;
-        parentStepId?: string;
-        stepKind?: string;
-        stepName?: string;
-        parentStepName?: string;
-        agentId?: string;
-        agentName?: string;
+        step?: StoredStep;
+        owner?: StoredOwner;
       }
     | undefined;
   const toolResultMessages = new Map<
@@ -169,13 +179,8 @@ export function persistHistory(
       toolCallArgs: new Map<string, string>(),
     };
 
-    currentAssistant.stepId ||= event?.stepId;
-    currentAssistant.parentStepId ||= event?.parentStepId;
-    currentAssistant.stepKind ||= event?.stepKind;
-    currentAssistant.stepName ||= event?.stepName;
-    currentAssistant.parentStepName ||= event?.parentStepName;
-    currentAssistant.agentId ||= event?.agentId;
-    currentAssistant.agentName ||= event?.agentName;
+    currentAssistant.step ||= event ? getStoredStep(event) : undefined;
+    currentAssistant.owner ||= event ? getStoredOwner(event) : undefined;
 
     return currentAssistant;
   };
@@ -192,14 +197,11 @@ export function persistHistory(
       role: "assistant",
       content: currentAssistant.content,
       toolCalls:
-        currentAssistant.toolCalls.length > 0 ? currentAssistant.toolCalls : undefined,
-      stepId: currentAssistant.stepId,
-      parentStepId: currentAssistant.parentStepId,
-      stepKind: currentAssistant.stepKind,
-      stepName: currentAssistant.stepName,
-      parentStepName: currentAssistant.parentStepName,
-      agentId: currentAssistant.agentId,
-      agentName: currentAssistant.agentName,
+        currentAssistant.toolCalls.length > 0
+          ? currentAssistant.toolCalls
+          : undefined,
+      step: currentAssistant.step,
+      owner: currentAssistant.owner,
       createdAt: new Date().toISOString(),
     } satisfies StoredMessage;
 
@@ -230,26 +232,16 @@ export function persistHistory(
           ...existing,
           role: "tool",
           toolCallId,
-          stepId: existing.stepId ?? payload.stepId,
-          parentStepId: existing.parentStepId ?? payload.parentStepId,
-          stepKind: existing.stepKind ?? payload.stepKind,
-          stepName: existing.stepName ?? payload.stepName,
-          parentStepName: existing.parentStepName ?? payload.parentStepName,
-          agentId: existing.agentId ?? payload.agentId,
-          agentName: existing.agentName ?? payload.agentName,
+          step: existing.step ?? payload.step,
+          owner: existing.owner ?? payload.owner,
         }
       : {
           id: messageId,
           role: "tool",
           content: "",
           toolCallId,
-          stepId: payload.stepId,
-          parentStepId: payload.parentStepId,
-          stepKind: payload.stepKind,
-          stepName: payload.stepName,
-          parentStepName: payload.parentStepName,
-          agentId: payload.agentId,
-          agentName: payload.agentName,
+          step: payload.step,
+          owner: payload.owner,
           createdAt: new Date().toISOString(),
         };
 
@@ -265,15 +257,7 @@ export function persistHistory(
       const toolMessage = ensureToolResultMessage(
         customToolResult.messageId,
         customToolResult.toolCallId,
-        {
-          stepId: customToolResult.stepId,
-          parentStepId: customToolResult.parentStepId,
-          stepKind: customToolResult.stepKind,
-          stepName: customToolResult.stepName,
-          parentStepName: customToolResult.parentStepName,
-          agentId: customToolResult.agentId,
-          agentName: customToolResult.agentName,
-        },
+        getStoredContext(customToolResult),
       );
 
       if (customToolResult.eventName === TOOL_RESULT_DELTA_EVENT) {
@@ -289,7 +273,11 @@ export function persistHistory(
 
     switch (event.type) {
       case EventType.TEXT_MESSAGE_START:
-        if (currentAssistant?.id && event.messageId && currentAssistant.id !== event.messageId) {
+        if (
+          currentAssistant?.id &&
+          event.messageId &&
+          currentAssistant.id !== event.messageId
+        ) {
           flushAssistant();
         }
         ensureAssistant(event.messageId, event);
@@ -306,13 +294,7 @@ export function persistHistory(
           id: event.toolCallId,
           type: "function",
           function: { name: event.toolCallName, arguments: "" },
-          stepId: event.stepId,
-          parentStepId: event.parentStepId,
-          stepKind: event.stepKind,
-          stepName: event.stepName,
-          parentStepName: event.parentStepName,
-          agentId: event.agentId,
-          agentName: event.agentName,
+          ...getStoredContext(event),
         });
         currentAssistant?.toolCallArgs.set(event.toolCallId, "");
         break;
@@ -320,8 +302,11 @@ export function persistHistory(
         if (!event.toolCallId) break;
         const assistant = ensureAssistant(undefined, event);
         const updated =
-          (assistant.toolCallArgs.get(event.toolCallId) || "") + (event.delta || "");
-        const toolCall = assistant.toolCalls.find((item) => item.id === event.toolCallId);
+          (assistant.toolCallArgs.get(event.toolCallId) || "") +
+          (event.delta || "");
+        const toolCall = assistant.toolCalls.find(
+          (item) => item.id === event.toolCallId,
+        );
 
         assistant.toolCallArgs.set(event.toolCallId, updated);
         if (toolCall) toolCall.function.arguments = updated;
@@ -331,19 +316,18 @@ export function persistHistory(
         if (!event.toolCallId) break;
         flushAssistant();
         const toolMessageId = event.messageId || uuid();
-        if (existingIds.has(toolMessageId) && !toolResultMessages.has(toolMessageId)) {
+        if (
+          existingIds.has(toolMessageId) &&
+          !toolResultMessages.has(toolMessageId)
+        ) {
           break;
         }
 
-        const toolMessage = ensureToolResultMessage(toolMessageId, event.toolCallId, {
-          stepId: event.stepId,
-          parentStepId: event.parentStepId,
-          stepKind: event.stepKind,
-          stepName: event.stepName,
-          parentStepName: event.parentStepName,
-          agentId: event.agentId,
-          agentName: event.agentName,
-        });
+        const toolMessage = ensureToolResultMessage(
+          toolMessageId,
+          event.toolCallId,
+          getStoredContext(event),
+        );
         toolMessage.content = event.content || toolMessage.content;
         toolMessage.isStreaming = false;
         break;

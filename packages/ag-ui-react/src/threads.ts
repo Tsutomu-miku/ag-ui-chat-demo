@@ -13,6 +13,7 @@ import type {
   ActiveStep,
   ChatMessage,
   ChatThread,
+  ExecutionContext,
   TraceEvent,
   ThreadAgentEvent,
   ThreadSummary,
@@ -21,15 +22,6 @@ import { updateMessagesWithAgentEvent } from "./reducer.js";
 
 function now() {
   return new Date().toISOString();
-}
-
-function eventAgentMetadata(event: ThreadAgentEvent) {
-  return "agentId" in event
-    ? {
-        ...(event.agentId ? { agentId: event.agentId } : {}),
-        ...(event.agentName ? { agentName: event.agentName } : {}),
-      }
-    : {};
 }
 
 function shouldFlushStreamingEvent(event: ThreadAgentEvent) {
@@ -42,8 +34,16 @@ function shouldFlushStreamingEvent(event: ThreadAgentEvent) {
     event.type === "tool_end" ||
     event.type === "tool_result_start" ||
     event.type === "tool_result_delta" ||
-    event.type === "tool_result_end"
+    event.type === "tool_result_end" ||
+    event.type === "trace_event"
   );
+}
+
+function getEventContext(event: Partial<ExecutionContext>) {
+  return {
+    ...(event.step ? { step: event.step } : {}),
+    ...(event.owner ? { owner: event.owner } : {}),
+  };
 }
 
 function toTraceEvent(
@@ -62,12 +62,7 @@ function toTraceEvent(
         type: "TEXT_MESSAGE_START",
         messageId: event.messageId,
         role: "assistant",
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
-        ...eventAgentMetadata(event),
+        ...getEventContext(event),
       };
     case "assistant_delta":
       return {
@@ -75,14 +70,12 @@ function toTraceEvent(
         type: "TEXT_MESSAGE_CONTENT",
         messageId: event.messageId,
         delta: event.delta,
-        ...eventAgentMetadata(event),
       };
     case "assistant_end":
       return {
         ...base,
         type: "TEXT_MESSAGE_END",
         messageId: event.messageId,
-        ...eventAgentMetadata(event),
       };
     case "tool_start":
       return {
@@ -91,12 +84,7 @@ function toTraceEvent(
         parentMessageId: event.parentMessageId,
         toolCallId: event.toolCallId,
         toolCallName: event.toolCallName,
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
-        ...eventAgentMetadata(event),
+        ...getEventContext(event),
       };
     case "tool_args":
       return {
@@ -104,14 +92,12 @@ function toTraceEvent(
         type: "TOOL_CALL_ARGS",
         toolCallId: event.toolCallId,
         delta: event.delta,
-        ...eventAgentMetadata(event),
       };
     case "tool_end":
       return {
         ...base,
         type: "TOOL_CALL_END",
         toolCallId: event.toolCallId,
-        ...eventAgentMetadata(event),
       };
     case "tool_result_start":
       return {
@@ -119,12 +105,7 @@ function toTraceEvent(
         type: "TOOL_CALL_RESULT_START",
         messageId: event.messageId,
         toolCallId: event.toolCallId,
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
-        ...eventAgentMetadata(event),
+        ...getEventContext(event),
       };
     case "tool_result_delta":
       return {
@@ -133,7 +114,6 @@ function toTraceEvent(
         messageId: event.messageId,
         toolCallId: event.toolCallId,
         delta: event.delta,
-        ...eventAgentMetadata(event),
       };
     case "tool_result_end":
       return {
@@ -141,41 +121,27 @@ function toTraceEvent(
         type: "TOOL_CALL_RESULT_END",
         messageId: event.messageId,
         toolCallId: event.toolCallId,
-        ...eventAgentMetadata(event),
       };
     case "step_started":
       return {
         ...base,
         type: "STEP_STARTED",
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
-        ...eventAgentMetadata(event),
+        step: event.step,
+        ...getEventContext(event),
       };
     case "step_finished":
       return {
         ...base,
         type: "STEP_FINISHED",
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
-        ...eventAgentMetadata(event),
+        step: event.step,
+        ...getEventContext(event),
       };
     case "reasoning_start":
       return {
         ...base,
         type: "REASONING_START",
         messageId: event.messageId,
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
-        ...eventAgentMetadata(event),
+        ...getEventContext(event),
       };
     case "reasoning_delta":
       return {
@@ -183,14 +149,12 @@ function toTraceEvent(
         type: "REASONING_MESSAGE_CONTENT",
         messageId: event.messageId,
         delta: event.delta,
-        ...eventAgentMetadata(event),
       };
     case "reasoning_end":
       return {
         ...base,
         type: "REASONING_END",
         messageId: event.messageId,
-        ...eventAgentMetadata(event),
       };
     case "append_message":
       if (event.message.role !== "tool") return null;
@@ -200,18 +164,19 @@ function toTraceEvent(
         messageId: event.message.id,
         content: event.message.content,
         toolCallId: event.message.toolCallId,
-        stepId: event.message.stepId,
-        parentStepId: event.message.parentStepId,
-        stepKind: event.message.stepKind,
-        stepName: event.message.stepName,
-        parentStepName: event.message.parentStepName,
-        agentId: event.message.agentId,
-        agentName: event.message.agentName,
+        ...getEventContext(event.message),
       };
     case "run_complete":
       return {
         ...base,
         type: "RUN_FINISHED",
+      };
+    case "trace_event":
+      return {
+        ...base,
+        type: "CUSTOM",
+        name: event.name,
+        value: event.value,
       };
   }
 }
@@ -389,38 +354,32 @@ export function useThreads({
         // Handle step events via dedicated state
         if (event.type === "step_started") {
           setActiveSteps((prev) => {
+            const step = event.step;
+            if (!step?.name) return prev;
             const alreadyTracked = prev.some(
-              (step) =>
-                (event.agentId && step.agentId === event.agentId) ||
-                (event.stepId && step.stepId === event.stepId) ||
-                (!event.stepId &&
-                  step.stepName === event.stepName &&
-                  step.parentStepName === event.parentStepName),
+              (activeStep) =>
+                activeStep.step?.id === step.id ||
+                (!step.id && activeStep.stepName === step.name),
             );
             if (alreadyTracked) return prev;
 
             return [
               ...prev,
               {
-                stepId: event.stepId,
-                parentStepId: event.parentStepId,
-                stepKind: event.stepKind,
-                stepName: event.stepName,
-                parentStepName: event.parentStepName,
-                agentId: event.agentId,
-                agentName: event.agentName,
+                stepName: step.name,
+                step,
+                ...(event.owner ? { owner: event.owner } : {}),
                 startedAt: now(),
               },
             ];
           });
         } else if (event.type === "step_finished") {
+          if (!event.step?.name) return;
           setActiveSteps((prev) =>
-            prev.filter((s) =>
-              event.agentId
-                ? s.agentId !== event.agentId
-                : event.stepId
-                  ? s.stepId !== event.stepId
-                  : s.stepName !== event.stepName,
+            prev.filter((activeStep) =>
+              event.step.id
+                ? activeStep.step?.id !== event.step.id
+                : activeStep.stepName !== event.step.name,
             ),
           );
         } else if (event.type === "run_complete") {
@@ -478,15 +437,8 @@ export function useThreads({
         role: "tool",
         content: result,
         toolCallId,
-        ...(owner?.stepId ? { stepId: owner.stepId } : {}),
-        ...(owner?.parentStepId ? { parentStepId: owner.parentStepId } : {}),
-        ...(owner?.stepKind ? { stepKind: owner.stepKind } : {}),
-        ...(owner?.stepName ? { stepName: owner.stepName } : {}),
-        ...(owner?.parentStepName
-          ? { parentStepName: owner.parentStepName }
-          : {}),
-        ...(owner?.agentId ? { agentId: owner.agentId } : {}),
-        ...(owner?.agentName ? { agentName: owner.agentName } : {}),
+        ...(owner?.step ? { step: owner.step } : {}),
+        ...(owner?.owner ? { owner: owner.owner } : {}),
         createdAt: now(),
       };
       handleThreadEvent(threadId, {

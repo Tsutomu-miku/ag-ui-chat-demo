@@ -1,4 +1,5 @@
 import { EventType, type Message } from "@ag-ui/core";
+import { AG_UI_TRACE_EVENT_NAME } from "ag-ui-langgraph";
 import { describe, expect, it } from "vitest";
 
 import { persistHistory } from "./persistence.js";
@@ -328,28 +329,39 @@ describe("persistHistory", () => {
     );
   });
 
-  it("does not persist removed ag-ui.trace span custom events", () => {
+  it("persists canonical ag-ui.trace custom events", () => {
     const threadId = `thread-${crypto.randomUUID()}`;
 
     persistHistory(threadId, [], [
-      { type: EventType.RUN_STARTED, threadId, runId: "run-trace-v2" },
+      { type: EventType.RUN_STARTED, threadId, runId: "run-trace-v1" },
       {
         type: EventType.CUSTOM,
-        name: "ag-ui.trace",
+        name: AG_UI_TRACE_EVENT_NAME,
         value: {
-          version: 2,
+          version: 1,
           type: "span.start",
-          agentId: "agent-writer-1",
-          agentName: "writer",
+          spanId: "span-writer-1",
+          name: "writer",
           kind: "subagent",
+          parentSpanId: "span-supervisor-1",
         },
       },
-      { type: EventType.RUN_FINISHED, threadId, runId: "run-trace-v2" },
+      { type: EventType.RUN_FINISHED, threadId, runId: "run-trace-v1" },
     ]);
 
-    expect(getThread(threadId)?.traceEvents).toEqual([
-      expect.objectContaining({ type: EventType.RUN_STARTED }),
-      expect.objectContaining({ type: EventType.RUN_FINISHED }),
-    ]);
+    expect(threadId).toBeTruthy();
+    expect(getThread(threadId)?.traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: EventType.CUSTOM,
+          name: AG_UI_TRACE_EVENT_NAME,
+          runId: "run-trace-v1",
+          value: expect.objectContaining({
+            type: "span.start",
+            spanId: "span-writer-1",
+          }),
+        }),
+      ]),
+    );
   });
 });

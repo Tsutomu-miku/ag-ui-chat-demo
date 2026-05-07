@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ChatThread } from "../src/types.js";
+import { AG_UI_TRACE_EVENT_NAME, type ChatThread } from "../src/types.js";
 import { useThreads } from "../src/threads.js";
 
 (
@@ -209,24 +209,22 @@ describe("useThreads", () => {
     act(() => {
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "step_started",
-        stepId: "step-researcher-1",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
-        stepName: "researcher",
-        parentStepName: "supervisor",
-        agentId: "agent-researcher-1",
-        agentName: "researcher",
+        step: {
+          id: "step-researcher-1",
+          parentId: "step-supervisor-1",
+          kind: "subagent",
+          name: "researcher",
+        },
       });
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "assistant_start",
         messageId: "assistant-1",
-        stepId: "step-researcher-1",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
-        stepName: "researcher",
-        parentStepName: "supervisor",
-        agentId: "agent-researcher-1",
-        agentName: "researcher",
+        step: {
+          id: "step-researcher-1",
+          parentId: "step-supervisor-1",
+          kind: "subagent",
+          name: "researcher",
+        },
       });
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "assistant_delta",
@@ -238,11 +236,12 @@ describe("useThreads", () => {
         parentMessageId: "assistant-1",
         toolCallId: "tool-1",
         toolCallName: "search_web",
-        stepId: "step-researcher-1",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
-        agentId: "agent-researcher-1",
-        agentName: "researcher",
+        step: {
+          id: "step-researcher-1",
+          parentId: "step-supervisor-1",
+          kind: "subagent",
+          name: "researcher",
+        },
       });
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "tool_end",
@@ -252,13 +251,12 @@ describe("useThreads", () => {
         type: "tool_result_start",
         messageId: "tool-message-stream-1",
         toolCallId: "tool-1",
-        stepId: "step-researcher-1",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
-        stepName: "researcher",
-        parentStepName: "supervisor",
-        agentId: "agent-researcher-1",
-        agentName: "researcher",
+        step: {
+          id: "step-researcher-1",
+          parentId: "step-supervisor-1",
+          kind: "subagent",
+          name: "researcher",
+        },
       });
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "tool_result_delta",
@@ -271,30 +269,39 @@ describe("useThreads", () => {
         messageId: "tool-message-stream-1",
         toolCallId: "tool-1",
       });
+      hook.result.current.handleThreadEvent(activeThreadId, {
+        type: "trace_event",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 1,
+          type: "tool.link",
+          toolCallId: "tool-1",
+          spanId: "span-researcher-1",
+        },
+      });
     });
 
     expect(hook.result.current.activeSteps).toEqual([
       expect.objectContaining({
-        stepId: "step-researcher-1",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
         stepName: "researcher",
-        parentStepName: "supervisor",
-        agentId: "agent-researcher-1",
-        agentName: "researcher",
+        step: {
+          id: "step-researcher-1",
+          parentId: "step-supervisor-1",
+          kind: "subagent",
+          name: "researcher",
+        },
       }),
     ]);
     expect(hook.result.current.active?.messages[0]).toMatchObject({
       id: "assistant-1",
       role: "assistant",
       content: "Hello",
-      stepName: "researcher",
-      parentStepName: "supervisor",
-      stepId: "step-researcher-1",
-      parentStepId: "step-supervisor-1",
-      stepKind: "subagent",
-      agentId: "agent-researcher-1",
-      agentName: "researcher",
+      step: {
+        id: "step-researcher-1",
+        parentId: "step-supervisor-1",
+        kind: "subagent",
+        name: "researcher",
+      },
       toolCalls: [
         {
           id: "tool-1",
@@ -303,8 +310,6 @@ describe("useThreads", () => {
             arguments: "",
           },
           complete: true,
-          agentId: "agent-researcher-1",
-          agentName: "researcher",
         },
       ],
     });
@@ -312,35 +317,44 @@ describe("useThreads", () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: "STEP_STARTED",
-          stepId: "step-researcher-1",
-          parentStepId: "step-supervisor-1",
+          step: expect.objectContaining({
+            id: "step-researcher-1",
+            parentId: "step-supervisor-1",
+          }),
         }),
         expect.objectContaining({
           type: "TEXT_MESSAGE_START",
           messageId: "assistant-1",
-          stepId: "step-researcher-1",
-          agentId: "agent-researcher-1",
-          agentName: "researcher",
+          step: expect.objectContaining({
+            id: "step-researcher-1",
+          }),
         }),
         expect.objectContaining({
           type: "TOOL_CALL_START",
           toolCallId: "tool-1",
-          stepId: "step-researcher-1",
-          agentId: "agent-researcher-1",
-          agentName: "researcher",
+          step: expect.objectContaining({
+            id: "step-researcher-1",
+          }),
         }),
         expect.objectContaining({
           type: "TOOL_CALL_RESULT_START",
           toolCallId: "tool-1",
           messageId: "tool-message-stream-1",
-          agentId: "agent-researcher-1",
-          agentName: "researcher",
         }),
         expect.objectContaining({
           type: "TOOL_CALL_RESULT_CHUNK",
           toolCallId: "tool-1",
           messageId: "tool-message-stream-1",
           delta: '{"ok"',
+        }),
+        expect.objectContaining({
+          type: "CUSTOM",
+          name: AG_UI_TRACE_EVENT_NAME,
+          value: expect.objectContaining({
+            type: "tool.link",
+            toolCallId: "tool-1",
+            spanId: "span-researcher-1",
+          }),
         }),
       ]),
     );
@@ -386,23 +400,30 @@ describe("useThreads", () => {
     act(() => {
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "step_started",
-        stepId: "step-writer-1",
-        stepName: "writer",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          parentId: "supervisor",
+          name: "writer",
+        },
       });
       hook.result.current.handleThreadEvent(activeThreadId, {
         type: "step_started",
-        stepId: "step-writer-1",
-        stepName: "writer",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          parentId: "supervisor",
+          name: "writer",
+        },
       });
     });
 
     expect(hook.result.current.activeSteps).toHaveLength(1);
     expect(hook.result.current.activeSteps[0]).toMatchObject({
       stepName: "writer",
-      parentStepName: "supervisor",
-      stepId: "step-writer-1",
+      step: {
+        id: "step-writer-1",
+        parentId: "supervisor",
+        name: "writer",
+      },
     });
     hook.unmount();
   });

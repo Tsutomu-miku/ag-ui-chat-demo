@@ -12,20 +12,16 @@ LangGraph compiled graph -> graph.streamEvents({ version: "v2" }) -> AG-UI event
 ```ts
 import { LangGraphAgent } from "ag-ui-langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { createAgentEndpoint } from "ag-ui-hono";
 
 const graph = createReactAgent({ llm: model, tools });
 const agent = new LangGraphAgent({ name: "assistant", graph });
 
-for await (const event of agent.clone().run(input)) {
-  // Forward each AG-UI event to your runtime, transport, or client.
-  console.log(event);
-}
+const app = createAgentEndpoint((input) => agent.clone().run(input));
 ```
 
 `clone()` should be used per request so stream-local state such as in-progress
 messages, tool calls, reasoning blocks, and active steps is isolated.
-`ag-ui-langgraph` does not require a specific HTTP framework; expose the
-returned async generator through whatever transport your application uses.
 
 ## Public API
 
@@ -51,35 +47,6 @@ Convenience factories are also exported:
   `@langchain/langgraph-supervisor` topology from named sub-agents, compiles it,
   and wraps it.
 
-The npm package intentionally exposes only the root entrypoint:
-
-```ts
-import { LangGraphAgent, createReactAgent } from "ag-ui-langgraph";
-```
-
-Internal source directories are organized for maintainers, not as npm subpath
-exports. Treat imports such as `ag-ui-langgraph/messages` or
-`ag-ui-langgraph/runtime` as unsupported.
-
-## Source Layout
-
-The TypeScript implementation is organized by runtime responsibility rather
-than by mirroring the Python file names:
-
-```text
-src/
-  agent/        stream-local agent state, reasoning helpers, trace state
-  messages/     AG-UI <-> LangChain message conversion and JSON-safe utilities
-  runtime/      LangGraph graph/input/stream interop helpers
-  state/        schema-key filtering and state merge helpers
-  translation/  LangGraph event translation context and event helpers
-  shared/       small cross-domain guards
-```
-
-`src/agent.ts` remains the primary adapter class and orchestrates these focused
-modules. Compatibility shims are kept only where they avoid unnecessary churn;
-new implementation code should prefer the domain directories above.
-
 ## Event Translation
 
 | LangGraph event | AG-UI event(s) |
@@ -94,28 +61,29 @@ new implementation code should prefer the domain directories above.
 | reasoning content blocks | `REASONING_*` events |
 | every LangGraph event | `RAW` event with JSON-safe payload |
 
-## Agent Attribution
+## Canonical Trace Events
 
-Sub-agent ownership is emitted in-band on standard AG-UI events via passthrough
-fields:
+Sub-agent hierarchy is emitted as standard AG-UI custom events:
 
 ```ts
 {
-  type: "TOOL_CALL_START",
-  toolCallId: "call-1",
-  toolCallName: "compose_text",
-  parentMessageId: "message-1",
-  agentId: "run-1:writer:branch-a",
-  agentName: "writer"
+  type: "CUSTOM",
+  name: "ag-ui.trace",
+  value: {
+    version: 1,
+    type: "span.start",
+    spanId: "run-1:writer:1",
+    name: "writer",
+    kind: "subagent",
+    parentSpanId: "run-1:supervisor:1"
+  }
 }
 ```
 
-`agentId` is an opaque concrete sub-agent instance id, not a display name or a
-span id. Two concurrent `writer` sub-agents share `agentName: "writer"` but must
-have different `agentId` values. The adapter derives this id from LangGraph
-checkpoint namespaces when available, then reuses the recorded `messageId` /
-`toolCallId` ownership for follow-up chunks and results. No `ag-ui.trace`
-`span.start` / `span.end` custom events are emitted.
+Trace payload types are `span.start`, `span.end`, `message.link`, and
+`tool.link`. Normal AG-UI `TEXT_MESSAGE_*`, `TOOL_CALL_*`, and `STEP_*` events
+remain protocol-compatible; clients should use `CUSTOM name="ag-ui.trace"` as
+the canonical source for parent-child trace rendering.
 
 ## Python Alignment Notes
 
@@ -130,28 +98,12 @@ snapshot suppression, and provider-specific reasoning extraction.
 
 ```bash
 pnpm --filter ag-ui-langgraph run test
-pnpm --filter ag-ui-langgraph run test:coverage
 pnpm --filter ag-ui-langgraph run typecheck
 ```
 
 The package test suite covers conversion utilities, reasoning extraction,
 JSON-safe serialization, schema filtering, checkpoint/interrupt behavior, state
-merge behavior, factory helpers, runtime graph helpers, and LangGraph event
-translation. `test:coverage` enforces global coverage thresholds before
-publishing.
-
-Tests follow the same domain boundaries as `src`:
-
-```text
-tests/
-  agent/
-  messages/
-  runtime/
-  state/
-  shared/
-  translation/
-  package/
-```
+merge behavior, and LangGraph event translation.
 
 ## Publishing
 
@@ -159,12 +111,11 @@ The npm package is emitted from `dist`:
 
 ```bash
 pnpm --filter ag-ui-langgraph run typecheck
-pnpm --filter ag-ui-langgraph run test:coverage
+pnpm --filter ag-ui-langgraph run test
 pnpm --filter ag-ui-langgraph run build
 pnpm --filter ag-ui-langgraph run publish:check-name
 pnpm --filter ag-ui-langgraph run publish:dry
 ```
 
-The build script removes `dist` before compiling so deleted modules cannot leak
-into the tarball. `publish:dry` runs `npm pack --dry-run`; the real publish step
-is intentionally left to the package owner.
+`publish:dry` runs `npm pack --dry-run`; the real publish step is intentionally
+left to the package owner.
