@@ -74,9 +74,9 @@ function nextStepId(
 }
 
 /**
- * @deprecated Canonical hierarchy metadata is emitted by LangGraphAgent as
- * `CUSTOM name="ag-ui.trace"` events. This plugin remains for older consumers
- * that still read passthrough fields from standard AG-UI events.
+ * @deprecated LangGraphAgent now stamps concrete `agentId`/`agentName`
+ * attribution in-band on standard AG-UI events. This plugin remains only for
+ * older consumers that still depend on its legacy step metadata.
  */
 export function createProtocolTracePlugin(): LangGraphPlugin {
   let currentStep: StepIdentity | null = null;
@@ -127,12 +127,10 @@ export function createProtocolTracePlugin(): LangGraphPlugin {
 
         return {
           ...event,
-          step: {
-            id: stepId,
-            ...(parentStepId ? { parentId: parentStepId } : {}),
-            kind: stepKind,
-            name: event.stepName,
-          },
+          stepId,
+          ...(parentStepId ? { parentStepId } : {}),
+          stepKind,
+          stepName: event.stepName,
         };
       }
 
@@ -141,14 +139,12 @@ export function createProtocolTracePlugin(): LangGraphPlugin {
           ...event,
           ...(currentStep
             ? {
-                step: {
-                  id: currentStep.stepId,
-                  ...(currentStep.parentStepId
-                    ? { parentId: currentStep.parentStepId }
-                    : {}),
-                  kind: currentStep.stepKind,
-                  name: currentStep.stepName,
-                },
+                stepId: currentStep.stepId,
+                ...(currentStep.parentStepId
+                  ? { parentStepId: currentStep.parentStepId }
+                  : {}),
+                stepKind: currentStep.stepKind,
+                stepName: currentStep.stepName,
               }
             : {}),
         };
@@ -168,14 +164,12 @@ export function createProtocolTracePlugin(): LangGraphPlugin {
         toolOwners.set(event.toolCallId, currentStep);
         return {
           ...event,
-          step: {
-            id: currentStep.stepId,
-            ...(currentStep.parentStepId
-              ? { parentId: currentStep.parentStepId }
-              : {}),
-            kind: currentStep.stepKind,
-            name: currentStep.stepName,
-          },
+          stepId: currentStep.stepId,
+          ...(currentStep.parentStepId
+            ? { parentStepId: currentStep.parentStepId }
+            : {}),
+          stepKind: currentStep.stepKind,
+          stepName: currentStep.stepName,
         };
       }
 
@@ -194,12 +188,10 @@ export function createProtocolTracePlugin(): LangGraphPlugin {
 
         return {
           ...event,
-          step: {
-            id: owner.stepId,
-            ...(owner.parentStepId ? { parentId: owner.parentStepId } : {}),
-            kind: owner.stepKind,
-            name: owner.stepName,
-          },
+          stepId: owner.stepId,
+          ...(owner.parentStepId ? { parentStepId: owner.parentStepId } : {}),
+          stepKind: owner.stepKind,
+          stepName: owner.stepName,
         };
       }
 
@@ -212,14 +204,12 @@ export function createProtocolTracePlugin(): LangGraphPlugin {
       ) {
         return {
           ...event,
-          step: {
-            id: currentStep.stepId,
-            ...(currentStep.parentStepId
-              ? { parentId: currentStep.parentStepId }
-              : {}),
-            kind: currentStep.stepKind,
-            name: currentStep.stepName,
-          },
+          stepId: currentStep.stepId,
+          ...(currentStep.parentStepId
+            ? { parentStepId: currentStep.parentStepId }
+            : {}),
+          stepKind: currentStep.stepKind,
+          stepName: currentStep.stepName,
         };
       }
 

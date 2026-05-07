@@ -7,7 +7,7 @@ import type {
   RunnableConfigLike,
   State,
 } from "../types.js";
-import { isRecord } from "../events/guards.js";
+import { isRecord } from "../shared/guards.js";
 
 export function detectSubgraphNames(graph: unknown): Set<string> {
   const subgraphs = new Set<string>();

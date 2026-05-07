@@ -127,7 +127,7 @@ export function AgentTraceView({
           toolResultById={toolResultById}
           activeStepIds={activeStepIds}
           renderedAgents={renderedAgents}
-          depth={0}
+          depth={getRootAgentDepth(traceData.nodes[stepId])}
         />
       ))}
     </>
@@ -224,6 +224,7 @@ function AgentNode({
   const parentAgent = agent.parentStepId
     ? traceData.nodes[agent.parentStepId]
     : undefined;
+  const isSubAgent = isSubAgentNode(agent, parentAgent);
   const hierarchyPath = buildAgentHierarchyPath(stepId, traceData);
   const hierarchyText = hierarchyPath.map((item) => item.label).join(" -> ");
   const relationLabel = parentAgent
@@ -270,10 +271,10 @@ function AgentNode({
 
   return (
     <div
-      className={`agent-node depth-${depth} ${isActive ? "active" : ""} ${parentAgent ? "is-child" : "is-root"}`}
+      className={`agent-node depth-${depth} ${isActive ? "active" : ""} ${isSubAgent ? "is-child" : "is-root"}`}
     >
       <div className="agent-node-meta">
-        <span className={`agent-relation ${parentAgent ? "child" : "root"}`}>
+        <span className={`agent-relation ${isSubAgent ? "child" : "root"}`}>
           {relationLabel}
         </span>
         <span className="agent-hierarchy-path">{hierarchyText}</span>
@@ -352,6 +353,22 @@ function AgentNode({
       </div>
     </div>
   );
+}
+
+function isSubAgentNode(
+  agent: AgentTraceNode,
+  parentAgent?: AgentTraceNode,
+): boolean {
+  return Boolean(
+    parentAgent ||
+    agent.stepKind === "subagent" ||
+    (agent.stepName && agent.stepName !== "supervisor"),
+  );
+}
+
+function getRootAgentDepth(agent?: AgentTraceNode): number {
+  if (!agent) return 0;
+  return isSubAgentNode(agent) ? 1 : 0;
 }
 
 function findChildAnchor(

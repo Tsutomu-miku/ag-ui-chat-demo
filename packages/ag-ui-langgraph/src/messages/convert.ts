@@ -21,6 +21,7 @@ import type {
   SchemaKeys,
   State,
 } from "../types.js";
+import { isRecord } from "../shared/guards.js";
 
 // ============================================================
 // Primitive helpers
@@ -73,7 +74,8 @@ export function parseToolArgs(
   args: string | undefined,
 ): Record<string, unknown> {
   try {
-    return JSON.parse(args || "{}");
+    const parsed = JSON.parse(args || "{}");
+    return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -471,6 +473,7 @@ export function flattenUserContent(content: unknown): string {
  * Aligned with Python `normalize_tool_content`.
  */
 export function normalizeToolContent(content: unknown): string {
+  if (content === null || content === undefined) return "";
   if (typeof content === "string") return content;
 
   if (Array.isArray(content)) {

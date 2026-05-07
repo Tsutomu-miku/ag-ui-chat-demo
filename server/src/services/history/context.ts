@@ -20,8 +20,15 @@ function storedMessageToMessage(message: StoredMessage): Message | null {
         role: "assistant",
         content: message.content,
         toolCalls: message.toolCalls,
-        ...(message.step ? { step: message.step } : {}),
-        ...(message.owner ? { owner: message.owner } : {}),
+        ...(message.stepId ? { stepId: message.stepId } : {}),
+        ...(message.parentStepId ? { parentStepId: message.parentStepId } : {}),
+        ...(message.stepKind ? { stepKind: message.stepKind } : {}),
+        ...(message.stepName ? { stepName: message.stepName } : {}),
+        ...(message.parentStepName
+          ? { parentStepName: message.parentStepName }
+          : {}),
+        ...(message.agentId ? { agentId: message.agentId } : {}),
+        ...(message.agentName ? { agentName: message.agentName } : {}),
       };
     case "tool":
       if (!message.toolCallId) return null;
@@ -31,8 +38,15 @@ function storedMessageToMessage(message: StoredMessage): Message | null {
         role: "tool",
         content: message.content,
         toolCallId: message.toolCallId,
-        ...(message.step ? { step: message.step } : {}),
-        ...(message.owner ? { owner: message.owner } : {}),
+        ...(message.stepId ? { stepId: message.stepId } : {}),
+        ...(message.parentStepId ? { parentStepId: message.parentStepId } : {}),
+        ...(message.stepKind ? { stepKind: message.stepKind } : {}),
+        ...(message.stepName ? { stepName: message.stepName } : {}),
+        ...(message.parentStepName
+          ? { parentStepName: message.parentStepName }
+          : {}),
+        ...(message.agentId ? { agentId: message.agentId } : {}),
+        ...(message.agentName ? { agentName: message.agentName } : {}),
       };
   }
 }

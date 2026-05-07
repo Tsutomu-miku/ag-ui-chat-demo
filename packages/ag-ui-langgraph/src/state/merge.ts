@@ -7,9 +7,9 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 
-import { normalizeToolContent } from "./convert.js";
+import { normalizeToolContent } from "../messages/convert.js";
 import type { State } from "../types.js";
-import { isRecord } from "../events/guards.js";
+import { isRecord } from "../shared/guards.js";
 
 export const A2UI_SCHEMA_CONTEXT_DESCRIPTION =
   "A2UI Component Schema — available components for generating UI surfaces.\nUse these component names and props when creating A2UI operations.";

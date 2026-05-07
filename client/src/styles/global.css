@@ -397,12 +397,23 @@ body {
 .agent-node.depth-1 { margin-left: 22px; }
 .agent-node.depth-2 { margin-left: 44px; }
 
+.agent-node.is-child {
+  padding: 10px 12px 8px;
+  border: 1px solid rgba(96, 165, 250, 0.16);
+  border-radius: 8px;
+  background: rgba(96, 165, 250, 0.035);
+}
+
 .agent-node-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0 0 8px 42px;
   min-width: 0;
+}
+
+.agent-node.is-child > .agent-node-meta {
+  margin-left: 0;
 }
 
 .agent-relation {

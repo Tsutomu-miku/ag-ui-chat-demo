@@ -37,6 +37,14 @@ export interface ToolCallFunction extends ExecutionContext {
   };
   /** Whether the tool call has completed (received result) */
   complete?: boolean;
+  /** AG-UI step metadata for tree rendering */
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
+  stepName?: string;
+  parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
 }
 
 // ── Chat message ──
@@ -55,6 +63,14 @@ export interface ChatMessage extends ExecutionContext {
   reasoning?: string;
   /** Whether the reasoning stream is still in progress */
   isReasoningStreaming?: boolean;
+  /** AG-UI step metadata for tree rendering */
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
+  stepName?: string;
+  parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
   createdAt: string;
 }
 
@@ -72,57 +88,15 @@ export interface TraceEvent {
   content?: string;
   toolCallId?: string;
   toolCallName?: string;
-  step?: ExecutionStep;
-  owner?: ExecutionOwner;
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
+  stepName?: string;
+  parentStepName?: string;
+  /** In-band agent attribution stamped on TEXT_MESSAGE_* / TOOL_CALL_* / REASONING_* events. */
+  agentId?: string;
+  agentName?: string;
 }
-
-export const AG_UI_TRACE_EVENT_NAME = "ag-ui.trace";
-export const AG_UI_TRACE_PROTOCOL_VERSION = 2;
-
-export type AgUiTraceOwner = {
-  key: string;
-  type: string;
-  instanceId: string;
-  parentKey?: string;
-};
-
-export type AgUiTraceEvent =
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "span.start";
-      spanId: string;
-      name: string;
-      kind: string;
-      parentSpanId?: string;
-      owner?: AgUiTraceOwner;
-      source?: Record<string, unknown>;
-    }
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "span.end";
-      spanId: string;
-      owner?: AgUiTraceOwner;
-      source?: Record<string, unknown>;
-    }
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "message.link";
-      messageId: string;
-      spanId: string;
-      role?: string;
-      owner?: AgUiTraceOwner;
-      source?: Record<string, unknown>;
-    }
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "tool.link";
-      toolCallId: string;
-      spanId: string;
-      toolCallName?: string;
-      parentMessageId?: string;
-      owner?: AgUiTraceOwner;
-      source?: Record<string, unknown>;
-    };
 
 // ── Thread (conversation) ──
 
@@ -152,20 +126,31 @@ export interface FrontendToolDefinition {
   parameters: Record<string, unknown>; // JSON Schema
 }
 
-export interface PendingToolCall {
+export interface PendingToolCall extends ExecutionContext {
   toolCallId: string;
   toolCallName: string;
   args: Record<string, unknown>;
   status: "pending" | "approved" | "rejected";
-  step?: ExecutionStep;
-  owner?: ExecutionOwner;
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
+  stepName?: string;
+  parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
   result?: string;
 }
 
 // ── Active step tracking for sub-agent execution ──
 
 export interface ActiveStep extends ExecutionContext {
+  stepId?: string;
+  parentStepId?: string;
+  stepKind?: string;
   stepName: string;
+  parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
   startedAt: string;
 }
 
@@ -182,83 +167,124 @@ export type ThreadAgentEvent =
   | {
       type: "assistant_start";
       messageId: string;
-      step?: ExecutionStep;
-      owner?: ExecutionOwner;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
+      stepName?: string;
+      parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "assistant_delta";
       messageId: string;
       delta: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "assistant_end";
       messageId: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_start";
       parentMessageId: string;
       toolCallId: string;
       toolCallName: string;
-      step?: ExecutionStep;
-      owner?: ExecutionOwner;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
+      stepName?: string;
+      parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_args";
       toolCallId: string;
       delta: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_end";
       toolCallId: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_result_start";
       messageId: string;
       toolCallId: string;
-      step?: ExecutionStep;
-      owner?: ExecutionOwner;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
+      stepName?: string;
+      parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_result_delta";
       messageId: string;
       toolCallId: string;
       delta: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "tool_result_end";
       messageId: string;
       toolCallId: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "step_started";
-      step: ExecutionStep & { name: string };
-      owner?: ExecutionOwner;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
+      stepName: string;
+      parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "reasoning_start";
       messageId: string;
-      step?: ExecutionStep;
-      owner?: ExecutionOwner;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
+      stepName?: string;
+      parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "reasoning_delta";
       messageId: string;
       delta: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "reasoning_end";
       messageId: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "step_finished";
-      step: ExecutionStep & { name: string };
-      owner?: ExecutionOwner;
+      stepId?: string;
+      parentStepId?: string;
+      stepKind?: string;
+      stepName: string;
+      parentStepName?: string;
+      agentId?: string;
+      agentName?: string;
     }
   | {
       type: "run_complete";
-    }
-  | {
-      type: "trace_event";
-      name: string;
-      value: unknown;
     };

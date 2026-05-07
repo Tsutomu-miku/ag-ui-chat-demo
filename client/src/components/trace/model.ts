@@ -1,12 +1,10 @@
 import type {
   ActiveStep,
-  AgUiTraceEvent,
   ChatMessage,
   ExecutionOwner,
   ToolCallFunction,
   TraceEvent,
 } from "ag-ui-react";
-import { AG_UI_TRACE_EVENT_NAME } from "ag-ui-react";
 
 export type TraceMode = "none" | "timeline" | "agent";
 
@@ -241,12 +239,15 @@ function isAgentStep(opts: {
   stepKind?: string;
   stepName?: string;
   parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
 }): boolean {
   return Boolean(
     opts.stepKind === "supervisor" ||
     opts.stepKind === "subagent" ||
     opts.parentStepId ||
-    opts.parentStepName,
+    opts.parentStepName ||
+    opts.agentId,
   );
 }
 
@@ -256,12 +257,15 @@ function hasStructuredAgentIdentity(opts: {
   stepKind?: string;
   stepName?: string;
   parentStepName?: string;
+  agentId?: string;
+  agentName?: string;
 }): boolean {
   return Boolean(
     opts.stepKind === "supervisor" ||
     opts.stepKind === "subagent" ||
     opts.parentStepId ||
-    opts.parentStepName,
+    opts.parentStepName ||
+    opts.agentId,
   );
 }
 
@@ -564,6 +568,40 @@ function pushChildRenderItem(
   pushTraceRenderItem(parent, { type: "child", stepId: childStepId });
 }
 
+function insertChildRenderItemAfterTool(
+  parent: AgentTraceNode,
+  childStepId: string,
+  toolCallId: string,
+) {
+  parent.renderItems = parent.renderItems.filter(
+    (item) => item.type !== "child" || item.stepId !== childStepId,
+  );
+
+  const anchorIndex = parent.renderItems.findIndex((item) => {
+    if (item.type === "tool") {
+      return item.toolCallId === toolCallId;
+    }
+    if (item.type !== "message") return false;
+    const message = parent.messages.find(
+      (candidate) => candidate.id === item.messageId,
+    );
+    return Boolean(
+      message?.toolCalls?.some((toolCall) => toolCall.id === toolCallId),
+    );
+  });
+
+  const childItem: AgentTraceRenderItem = {
+    type: "child",
+    stepId: childStepId,
+  };
+  if (anchorIndex >= 0) {
+    parent.renderItems.splice(anchorIndex + 1, 0, childItem);
+    return;
+  }
+
+  parent.renderItems.push(childItem);
+}
+
 function linkParent(
   nodes: Record<string, AgentTraceNode>,
   parentStepId: string,
@@ -579,6 +617,72 @@ function linkParent(
   child.parentStepName ||= parent.stepName;
   if (!parent.childStepIds.includes(childStepId)) {
     parent.childStepIds.push(childStepId);
+  }
+}
+
+function isSubAgentTraceNode(node: AgentTraceNode): boolean {
+  return Boolean(
+    node.stepKind === "subagent" || node.stepName !== "supervisor",
+  );
+}
+
+function getDelegationAnchors(node: AgentTraceNode): Array<{
+  toolCallId: string;
+  delegatedAgent: string;
+  order: number;
+}> {
+  return node.toolCalls
+    .map((toolCall) => {
+      const delegatedAgent = getDelegatedAgent(toolCall);
+      if (!delegatedAgent) return undefined;
+      return {
+        toolCallId: toolCall.id,
+        delegatedAgent,
+        order: node.toolOrders[toolCall.id] ?? getNodeOrder(node),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+}
+
+function inferDelegatedAgentParents(nodes: Record<string, AgentTraceNode>) {
+  const usedToolCallIds = new Set<string>();
+  const candidates = Object.values(nodes)
+    .filter((node) => !node.parentStepId && isSubAgentTraceNode(node))
+    .sort((left, right) => getNodeOrder(left) - getNodeOrder(right));
+
+  for (const child of candidates) {
+    const childOrder = getNodeOrder(child);
+    const anchor = Object.values(nodes)
+      .filter((node) => node.stepId !== child.stepId)
+      .flatMap((node) =>
+        getDelegationAnchors(node)
+          .filter(
+            (item) =>
+              item.delegatedAgent === child.stepName &&
+              !usedToolCallIds.has(item.toolCallId),
+          )
+          .map((item) => ({ parent: node, ...item })),
+      )
+      .sort((left, right) => {
+        const leftBeforeChild = left.order <= childOrder;
+        const rightBeforeChild = right.order <= childOrder;
+        if (leftBeforeChild !== rightBeforeChild) {
+          return leftBeforeChild ? -1 : 1;
+        }
+        if (leftBeforeChild && rightBeforeChild) {
+          return right.order - left.order;
+        }
+        return left.order - right.order;
+      })[0];
+
+    if (!anchor) continue;
+    usedToolCallIds.add(anchor.toolCallId);
+    linkParent(nodes, anchor.parent.stepId, child.stepId);
+    insertChildRenderItemAfterTool(
+      anchor.parent,
+      child.stepId,
+      anchor.toolCallId,
+    );
   }
 }
 
@@ -602,6 +706,19 @@ function collectStepIdsFromMessages(messages: ChatMessage[]) {
   return stepIds;
 }
 
+function collectAgentIdsFromMessages(messages: ChatMessage[]) {
+  const agentIds = new Set<string>();
+
+  for (const message of messages) {
+    if (message.agentId) agentIds.add(message.agentId);
+    for (const toolCall of message.toolCalls ?? []) {
+      if (toolCall.agentId) agentIds.add(toolCall.agentId);
+    }
+  }
+
+  return agentIds;
+}
+
 export function filterTraceEventsForTurn(
   traceEvents: TraceEvent[],
   messages: ChatMessage[],
@@ -620,7 +737,7 @@ export function filterTraceEventsForTurn(
         (event) =>
           event.type !== "RUN_STARTED" &&
           event.type !== "RUN_FINISHED" &&
-          getCanonicalTraceValue(event) !== null,
+          event.type !== "CUSTOM",
       );
   }
 
@@ -632,29 +749,12 @@ export function filterTraceEventsForTurn(
     ]),
   );
   const stepIds = collectStepIdsFromMessages(messages);
+  const agentIds = collectAgentIdsFromMessages(messages);
   const selected = new Set<number>();
 
   for (let index = 0; index < traceEvents.length; index++) {
     const event = traceEvents[index]!;
-    const traceValue = getCanonicalTraceValue(event);
-
-    if (
-      traceValue?.type === "message.link" &&
-      messageIds.has(traceValue.messageId)
-    ) {
-      selected.add(index);
-      stepIds.add(traceValue.spanId);
-      continue;
-    }
-
-    if (
-      traceValue?.type === "tool.link" &&
-      toolCallIds.has(traceValue.toolCallId)
-    ) {
-      selected.add(index);
-      stepIds.add(traceValue.spanId);
-      continue;
-    }
+    const inBandAgentId = (event as TraceEvent & { agentId?: string }).agentId;
 
     if (
       (event.messageId && messageIds.has(event.messageId)) ||
@@ -673,27 +773,7 @@ export function filterTraceEventsForTurn(
     for (let index = 0; index < traceEvents.length; index++) {
       if (selected.has(index)) continue;
       const event = traceEvents[index]!;
-      const traceValue = getCanonicalTraceValue(event);
-      const traceStepId =
-        traceValue?.type === "span.start" ||
-        traceValue?.type === "span.end" ||
-        traceValue?.type === "message.link" ||
-        traceValue?.type === "tool.link"
-          ? traceValue.spanId
-          : undefined;
-      const traceParentStepId =
-        traceValue?.type === "span.start" ? traceValue.parentSpanId : undefined;
-
-      if (
-        (traceStepId && stepIds.has(traceStepId)) ||
-        (traceParentStepId && stepIds.has(traceParentStepId))
-      ) {
-        selected.add(index);
-        if (traceStepId) stepIds.add(traceStepId);
-        if (traceParentStepId) stepIds.add(traceParentStepId);
-        changed = true;
-        continue;
-      }
+      if (event.type === "CUSTOM") continue;
 
       if (
         (event.step?.id && stepIds.has(event.step.id)) ||
@@ -721,6 +801,15 @@ function buildStructuredAgentTraceData(
   traceEvents: TraceEvent[],
 ): AgentTraceData | null {
   const nodes: Record<string, AgentTraceNode> = {};
+  const messageAgentIds = new Map<string, string>();
+  const toolAgentIds = new Map<
+    string,
+    {
+      agentId: string;
+      traceOrder: number;
+      toolCallName?: string;
+    }
+  >();
 
   for (const [eventIndex, event] of traceEvents.entries()) {
     const step = event.step;
@@ -830,8 +919,21 @@ function buildStructuredAgentTraceData(
       if (message.role !== "tool") {
         pushTraceRenderItem(node, { type: "message", messageId: message.id });
         for (const toolCall of message.toolCalls ?? []) {
-          node.toolOrders[toolCall.id] = messageIndex + 0.01;
+          const ownerAgentId =
+            toolAgentIds.get(toolCall.id)?.agentId ??
+            toolCall.agentId ??
+            resolvedStepId;
+          const ownerNode = nodes[ownerAgentId] ?? node;
+          if (!ownerNode.toolCalls.some((item) => item.id === toolCall.id)) {
+            ownerNode.toolCalls.push(toolCall);
+          }
+          ownerNode.toolOrders[toolCall.id] = messageIndex + 0.01;
         }
+      } else if (message.toolCallId) {
+        pushTraceRenderItem(node, {
+          type: "tool",
+          toolCallId: message.toolCallId,
+        });
       }
       if (resolvedParentStepId) {
         ensureTraceNode(
@@ -1115,6 +1217,8 @@ function buildCanonicalAgentTraceData(
     }
   }
 
+  inferDelegatedAgentParents(nodes);
+
   if (Object.keys(nodes).length === 0) {
     return null;
   }
@@ -1144,9 +1248,6 @@ export function buildAgentTraceData(
 ): AgentTraceData | null {
   if (getTraceMode(messages, activeSteps, traceEvents) !== "agent") {
     return null;
-  }
-  if (hasCanonicalTrace(traceEvents)) {
-    return buildCanonicalAgentTraceData(messages, traceEvents);
   }
   return buildStructuredAgentTraceData(messages, activeSteps, traceEvents);
 }

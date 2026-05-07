@@ -1,7 +1,7 @@
 /**
  * LangGraphAgent — AG-UI protocol adapter for LangGraph compiled graphs.
  *
- * **Fully aligned with Python `ag_ui_langgraph.LangGraphAgent` v0.0.34:**
+ * **Aligned with Python `ag_ui_langgraph.LangGraphAgent`:**
  * - Accepts a compiled LangGraph state graph (not raw model/tools)
  * - Uses `graph.streamEvents(input, { version: "v2" })` to intercept
  *   LangGraph internal events (on_chat_model_stream, on_tool_end, etc.)
@@ -33,20 +33,16 @@ import {
 } from "@ag-ui/core";
 import {
   HumanMessage,
-  SystemMessage,
-  ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
-import { Command } from "@langchain/langgraph";
 import { v4 as uuid } from "uuid";
 
 import {
   toLangChainMessages,
   langchainMessagesToAgui,
   filterObjectBySchemaKeys,
-  getStreamPayloadInput,
   aguiMessagesToLangchain,
-} from "./utils/convert.js";
+} from "./messages/convert.js";
 import {
   DEFAULT_SCHEMA_KEYS,
   LangGraphEventTypes,
@@ -56,7 +52,6 @@ import type {
   RunMetadata,
   MessageInProgress,
   MessagesInProgressRecord,
-  LangGraphReasoning,
   State,
   SchemaKeys,
   PreparedStream,
@@ -65,7 +60,6 @@ import type {
   LangGraphStreamEvent,
   CheckpointSnapshotLike,
   InterruptLike,
-  TraceStepKind,
 } from "./types.js";
 import {
   ROOT_SUBGRAPH_NAME,
@@ -73,12 +67,12 @@ import {
   getStreamArgs,
   parseResumeInput,
   sanitizeRawPayloads,
-} from "./utils/events.js";
-import { getGraphSchemaKeys } from "./utils/schema.js";
+} from "./runtime/stream.js";
+import { getGraphSchemaKeys } from "./state/schema.js";
 import {
   filterOrphanToolMessages,
   mergeLangGraphState,
-} from "./utils/state.js";
+} from "./state/merge.js";
 import {
   asLangGraphStreamEvent,
   getSubgraphInfo,
@@ -87,7 +81,7 @@ import {
 import {
   markPredictStateToolIfNeeded,
   translateSingleEvent,
-} from "./events/translator.js";
+} from "./translation/translator.js";
 import {
   collectInterrupts,
   detectSubgraphNames,
@@ -108,15 +102,34 @@ import type {
   LangGraphPluginContext,
 } from "./plugins/trace.js";
 import {
-  createTraceCustomEvent,
-  getCheckpointNamespaceRoot,
-  traceSourceFromLangGraphEvent,
-  type AgUiTraceSource,
-} from "./trace.js";
+  handleReasoningEvent as handleReasoningEventForRun,
+} from "./agent/reasoning.js";
 import {
-  buildTraceOwnerFromSource,
-  type TraceOwnerMetadata,
-} from "./runtime/trace-owner.js";
+  clearMessageInProgress,
+  getMessageInProgress as readMessageInProgress,
+  setMessageInProgress as writeMessageInProgress,
+} from "./agent/message-state.js";
+import { createRunMetadata } from "./agent/run-state.js";
+import {
+  buildInterruptEvents,
+  buildPreparedStreamInput,
+  findRegenerationMessage,
+  getCheckpointMessages,
+} from "./agent/stream-preparation.js";
+import {
+  classifyTraceStepKind as classifyTraceStepKindForRun,
+  createTraceState,
+  emitTraceLinksForEvent as emitTraceLinksForRun,
+  finishTraceSpan as finishTraceSpanForRun,
+  getTraceNamespaceRoot,
+  nextTraceAgentId as nextTraceAgentIdForRun,
+  resetTraceState,
+  resolveTraceAgentId as resolveTraceAgentIdForRun,
+  resolveTraceStepName as resolveTraceStepNameForRun,
+  startTraceSpan as startTraceSpanForRun,
+  type TraceState,
+  type TraceStateContext,
+} from "./agent/trace-state.js";
 
 // ── Configuration types ──
 
@@ -132,19 +145,11 @@ export interface LangGraphAgentConfig {
   config?: Record<string, unknown>;
   /** Optional protocol plugins */
   plugins?: LangGraphPlugin[];
-  /** Known sub-agent names for canonical AG-UI trace spans */
+  /** Known sub-agent names used for agent attribution/classification */
   subAgents?: string[];
 }
 
-type ActiveTraceSpan = {
-  spanId: string;
-  name: string;
-  kind: TraceStepKind;
-  parentSpanId?: string;
-  owner: TraceOwnerMetadata;
-};
-
-// ── LangGraphAgent class (fully aligned with Python v0.0.34) ──
+// ── LangGraphAgent class (aligned with Python ag_ui_langgraph) ──
 
 /**
  * Core AG-UI agent adapter, fully aligned with Python `ag_ui_langgraph.LangGraphAgent`.
@@ -163,18 +168,7 @@ export class LangGraphAgent {
   /** Per-request mutable state (reset on clone) */
   protected messagesInProgress: MessagesInProgressRecord = {};
   protected activeRun: RunMetadata | null = null;
-  protected traceRunId: string | null = null;
-  protected activeTraceSpan: ActiveTraceSpan | null = null;
-  protected lastSupervisorSpanId: string | undefined;
-  protected lastSupervisorOwnerKey: string | undefined;
-  protected traceSpanCounters = new Map<string, number>();
-  protected linkedTraceMessages = new Set<string>();
-  protected linkedTraceTools = new Set<string>();
-  protected traceSpans = new Map<string, ActiveTraceSpan>();
-  protected traceOwners = new Map<string, TraceOwnerMetadata>();
-  protected traceOwnerSpans = new Map<string, string>();
-  protected traceMessageOwners = new Map<string, string>();
-  protected traceToolOwners = new Map<string, string>();
+  protected traceState: TraceState = createTraceState();
 
   /** Subgraph detection */
   protected subgraphs: Set<string>;
@@ -261,441 +255,96 @@ export class LangGraphAgent {
     };
   }
 
+  protected getTraceContext(): TraceStateContext {
+    return {
+      agentName: this.name,
+      activeRun: this.activeRun,
+      currentSubgraph: this.currentSubgraph,
+      subgraphs: this.subgraphs,
+      traceSubAgents: this.traceSubAgents,
+      state: this.traceState,
+      dispatchEvent: (event: BaseEvent) => this._dispatchEvent(event),
+    };
+  }
+
   protected getTraceNamespaceRoot(
     sourceEvent?: LangGraphStreamEvent | null,
   ): string | undefined {
-    const checkpointNamespace =
-      typeof sourceEvent?.metadata?.langgraph_checkpoint_ns === "string"
-        ? sourceEvent.metadata.langgraph_checkpoint_ns
-        : undefined;
-    const namespaceRoot = getCheckpointNamespaceRoot(checkpointNamespace);
-
-    if (
-      !namespaceRoot ||
-      namespaceRoot === ROOT_SUBGRAPH_NAME ||
-      namespaceRoot === "agent" ||
-      namespaceRoot === "tools"
-    ) {
-      return undefined;
-    }
-
-    return namespaceRoot;
+    return getTraceNamespaceRoot(sourceEvent);
   }
 
   protected resolveTraceStepName(
     stepName: string,
     sourceEvent?: LangGraphStreamEvent | null,
   ): string {
-    return (
-      this.getTraceNamespaceRoot(sourceEvent) ||
-      (this.currentSubgraph !== ROOT_SUBGRAPH_NAME
-        ? this.currentSubgraph
-        : undefined) ||
-      stepName
+    return resolveTraceStepNameForRun(this.getTraceContext(), stepName, sourceEvent);
+  }
+
+  protected classifyTraceStepKind(
+    stepName: import("./types.js").TraceStepKind | string,
+  ): import("./types.js").TraceStepKind {
+    return classifyTraceStepKindForRun(this.getTraceContext(), stepName);
+  }
+
+  protected nextTraceAgentId(stepName: string): string {
+    return nextTraceAgentIdForRun(this.getTraceContext(), stepName);
+  }
+
+  protected resolveTraceAgentId(
+    stepName: string,
+    sourceEvent?: LangGraphStreamEvent | null,
+  ): string {
+    return resolveTraceAgentIdForRun(
+      this.getTraceContext(),
+      stepName,
+      sourceEvent,
     );
-  }
-
-  protected getActiveTraceStepName(): string | undefined {
-    return this.activeTraceSpan?.name;
-  }
-
-  protected getActiveTraceOwner(): TraceOwnerMetadata | undefined {
-    return this.activeTraceSpan?.owner;
-  }
-
-  protected classifyTraceStepKind(stepName: string): TraceStepKind {
-    if (stepName === this.name || stepName === "supervisor") {
-      return "supervisor";
-    }
-
-    if (this.traceSubAgents.has(stepName) || this.subgraphs.has(stepName)) {
-      return "subagent";
-    }
-
-    return "node";
-  }
-
-  protected nextTraceSpanId(stepName: string): string {
-    const runId = this.traceRunId ?? this.activeRun?.id ?? "run";
-    const key = `${runId}:${stepName}`;
-    const next = (this.traceSpanCounters.get(key) ?? 0) + 1;
-    this.traceSpanCounters.set(key, next);
-    return `${runId}:${stepName}:${next}`;
-  }
-
-  protected *emitTraceEvent(
-    event: Parameters<typeof createTraceCustomEvent>[0],
-  ): Generator<BaseEvent> {
-    const ev = this._dispatchEvent(createTraceCustomEvent(event));
-    if (ev) yield ev;
-  }
-
-  protected buildTraceSource(
-    nodeName?: string | null,
-    event?: LangGraphStreamEvent | null,
-  ): AgUiTraceSource {
-    return traceSourceFromLangGraphEvent({
-      runId: this.activeRun?.id,
-      nodeName: nodeName ?? undefined,
-      event: event ?? null,
-    });
   }
 
   protected *startTraceSpan(
     stepName: string,
     sourceEvent?: LangGraphStreamEvent | null,
   ): Generator<BaseEvent> {
-    const traceStepName = this.resolveTraceStepName(stepName, sourceEvent);
-    const kind = this.classifyTraceStepKind(traceStepName);
-    const spanId = this.nextTraceSpanId(traceStepName);
-    const parentSpanId =
-      kind === "subagent" ? this.lastSupervisorSpanId : undefined;
-    const inheritedParentOwnerKey = parentSpanId
-      ? this.traceSpans.get(parentSpanId)?.owner.key
-      : undefined;
-    const owner = buildTraceOwnerFromSource({
-      runId: this.traceRunId ?? this.activeRun?.id,
-      stepName: traceStepName,
-      kind,
-      event: sourceEvent,
-      owner: inheritedParentOwnerKey
-        ? { parentKey: inheritedParentOwnerKey }
-        : undefined,
-    });
-
-    this.activeTraceSpan = {
-      spanId,
-      name: traceStepName,
-      kind,
-      ...(parentSpanId ? { parentSpanId } : {}),
-      owner,
-    };
-    this.traceSpans.set(spanId, this.activeTraceSpan);
-    this.traceOwners.set(owner.key, owner);
-    this.traceOwnerSpans.set(owner.key, spanId);
-
-    if (kind === "supervisor") {
-      this.lastSupervisorSpanId = spanId;
-      this.lastSupervisorOwnerKey = owner.key;
-    }
-
-    yield* this.emitTraceEvent({
-      type: "span.start",
-      spanId,
-      name: traceStepName,
-      kind,
-      ...(parentSpanId ? { parentSpanId } : {}),
-      owner: {
-        key: owner.key,
-        type: owner.type,
-        instanceId: owner.instanceId,
-        ...(owner.parentKey ? { parentKey: owner.parentKey } : {}),
-      },
-      source: this.buildTraceSource(traceStepName, sourceEvent),
-    });
+    yield* startTraceSpanForRun(
+      this.getTraceContext(),
+      stepName,
+      sourceEvent,
+    );
   }
 
   protected *finishTraceSpan(
     stepName: string,
     sourceEvent?: LangGraphStreamEvent | null,
   ): Generator<BaseEvent> {
-    const span = this.activeTraceSpan;
-    if (!span) return;
-    const traceStepName =
-      stepName === span.name
-        ? stepName
-        : this.resolveTraceStepName(stepName, sourceEvent);
-    if (span.name !== traceStepName) return;
-
-    yield* this.emitTraceEvent({
-      type: "span.end",
-      spanId: span.spanId,
-      owner: {
-        key: span.owner.key,
-        type: span.owner.type,
-        instanceId: span.owner.instanceId,
-        ...(span.owner.parentKey ? { parentKey: span.owner.parentKey } : {}),
-      },
-      source: this.buildTraceSource(traceStepName, sourceEvent),
-    });
-
-    this.activeTraceSpan = null;
+    yield* finishTraceSpanForRun(
+      this.getTraceContext(),
+      stepName,
+      sourceEvent,
+    );
   }
 
   protected *emitTraceLinksForEvent(
     event: BaseEvent,
     sourceEvent?: LangGraphStreamEvent | null,
   ): Generator<BaseEvent> {
-    const activeSpan = this.activeTraceSpan;
-    const linkedMessages = this.linkedTraceMessages;
-    const linkedTools = this.linkedTraceTools;
-    const traceEvent = event as BaseEvent &
-      Partial<{
-        messageId: string;
-        parentMessageId: string;
-        role: string;
-        toolCallId: string;
-        toolCallName: string;
-        owner: {
-          key: string;
-        };
-      }>;
-
-    const resolveSpan = (opts: {
-      spanId?: string;
-      owner?: {
-        key: string;
-      };
-    }): ActiveTraceSpan | null => {
-      if (opts.owner?.key) {
-        const ownerSpanId = this.traceOwnerSpans.get(opts.owner.key);
-        if (ownerSpanId) {
-          return this.traceSpans.get(ownerSpanId) ?? activeSpan ?? null;
-        }
-      }
-      if (opts.spanId)
-        return this.traceSpans.get(opts.spanId) ?? activeSpan ?? null;
-      return activeSpan ?? null;
-    };
-
-    const linkMessage = function* (
-      self: LangGraphAgent,
-      messageId: string | undefined,
-      role?: string,
-      opts: {
-        spanId?: string;
-        owner?: {
-          key: string;
-        };
-      } = {},
-    ): Generator<BaseEvent> {
-      const span = resolveSpan(opts);
-      if (!messageId || linkedMessages.has(messageId) || !span) return;
-      linkedMessages.add(messageId);
-      self.traceMessageOwners.set(messageId, span.owner.key);
-      yield* self.emitTraceEvent({
-        type: "message.link",
-        messageId,
-        spanId: span.spanId,
-        ...(role ? { role } : {}),
-        owner: {
-          key: span.owner.key,
-          type: span.owner.type,
-          instanceId: span.owner.instanceId,
-          ...(span.owner.parentKey ? { parentKey: span.owner.parentKey } : {}),
-        },
-        source: self.buildTraceSource(span.name, sourceEvent),
-      });
-    };
-
-    const linkTool = function* (
-      self: LangGraphAgent,
-      toolCallId: string | undefined,
-      opts: {
-        toolCallName?: string;
-        parentMessageId?: string;
-        spanId?: string;
-        owner?: {
-          key: string;
-        };
-      } = {},
-    ): Generator<BaseEvent> {
-      if (!toolCallId || linkedTools.has(toolCallId)) return;
-
-      const ownedOwnerKey =
-        opts.owner?.key ??
-        (opts.parentMessageId
-          ? self.traceMessageOwners.get(opts.parentMessageId)
-          : undefined) ??
-        self.traceToolOwners.get(toolCallId);
-      const span = resolveSpan({
-        spanId: opts.spanId,
-        owner: ownedOwnerKey ? { key: ownedOwnerKey } : undefined,
-      });
-      if (!span) return;
-
-      linkedTools.add(toolCallId);
-      self.traceToolOwners.set(toolCallId, span.owner.key);
-      yield* self.emitTraceEvent({
-        type: "tool.link",
-        toolCallId,
-        spanId: span.spanId,
-        ...(opts.toolCallName ? { toolCallName: opts.toolCallName } : {}),
-        ...(opts.parentMessageId
-          ? { parentMessageId: opts.parentMessageId }
-          : {}),
-        owner: {
-          key: span.owner.key,
-          type: span.owner.type,
-          instanceId: span.owner.instanceId,
-          ...(span.owner.parentKey ? { parentKey: span.owner.parentKey } : {}),
-        },
-        source: self.buildTraceSource(span.name, sourceEvent),
-      });
-    };
-
-    if (
-      event.type === EventType.TEXT_MESSAGE_START ||
-      event.type === EventType.REASONING_START ||
-      event.type === EventType.REASONING_MESSAGE_START
-    ) {
-      yield* linkMessage(
-        this,
-        traceEvent.messageId,
-        traceEvent.role ?? "assistant",
-        {
-          owner:
-            traceEvent.owner ??
-            (() => {
-              const ownerKey = this.traceMessageOwners.get(
-                traceEvent.messageId ?? "",
-              );
-              return ownerKey ? { key: ownerKey } : undefined;
-            })(),
-        },
-      );
-    }
-
-    if (event.type === EventType.TOOL_CALL_START) {
-      const ownerKey =
-        traceEvent.owner?.key ??
-        (traceEvent.parentMessageId
-          ? this.traceMessageOwners.get(traceEvent.parentMessageId)
-          : undefined);
-      yield* linkMessage(this, traceEvent.parentMessageId, "assistant", {
-        owner: ownerKey ? { key: ownerKey } : undefined,
-      });
-      yield* linkTool(this, traceEvent.toolCallId, {
-        toolCallName: traceEvent.toolCallName,
-        parentMessageId: traceEvent.parentMessageId,
-        owner: ownerKey ? { key: ownerKey } : undefined,
-      });
-    }
-
-    if (event.type === EventType.TOOL_CALL_RESULT) {
-      const ownerKey =
-        traceEvent.owner?.key ??
-        (traceEvent.toolCallId
-          ? this.traceToolOwners.get(traceEvent.toolCallId)
-          : undefined);
-      yield* linkMessage(this, traceEvent.messageId, "tool", {
-        owner: ownerKey ? { key: ownerKey } : undefined,
-      });
-      yield* linkTool(this, traceEvent.toolCallId, {
-        owner: ownerKey ? { key: ownerKey } : undefined,
-      });
-    }
-  }
-
-  protected getOwnerMetadataForEvent(
-    event: BaseEvent &
-      Partial<{
-        messageId: string;
-        parentMessageId: string;
-        toolCallId: string;
-        owner: {
-          key: string;
-        };
-      }>,
-  ): TraceOwnerMetadata | null {
-    const directOwnerKey = event.owner?.key;
-    if (directOwnerKey) {
-      return this.traceOwners.get(directOwnerKey) ?? null;
-    }
-
-    if (event.toolCallId) {
-      const ownerKey = this.traceToolOwners.get(event.toolCallId);
-      if (ownerKey) return this.traceOwners.get(ownerKey) ?? null;
-    }
-
-    if (event.parentMessageId) {
-      const ownerKey = this.traceMessageOwners.get(event.parentMessageId);
-      if (ownerKey) return this.traceOwners.get(ownerKey) ?? null;
-    }
-
-    if (event.messageId) {
-      const ownerKey = this.traceMessageOwners.get(event.messageId);
-      if (ownerKey) return this.traceOwners.get(ownerKey) ?? null;
-    }
-
-    return this.getActiveTraceOwner() ?? null;
-  }
-
-  protected attachTraceOwnerToEvent(event: BaseEvent): BaseEvent {
-    const mutable = event as BaseEvent &
-      Partial<{
-        messageId: string;
-        parentMessageId: string;
-        toolCallId: string;
-        owner: {
-          key: string;
-          type: string;
-          instanceId: string;
-          parentKey?: string;
-        };
-        emitterId: string;
-      }>;
-    const owner = this.getOwnerMetadataForEvent(mutable);
-    if (!owner) return event;
-
-    mutable.owner ??= {
-      key: owner.key,
-      type: owner.type,
-      instanceId: owner.instanceId,
-      ...(owner.parentKey ? { parentKey: owner.parentKey } : {}),
-    };
-    mutable.emitterId ??= this.activeTraceSpan?.spanId;
-    return mutable;
-  }
-
-  protected *handleTraceOwnerBoundary(
-    currentNodeName: string,
-    sourceEvent: LangGraphStreamEvent,
-  ): Generator<BaseEvent> {
-    const activeSpan = this.activeTraceSpan;
-    if (!activeSpan) return;
-
-    const nextStepName = this.resolveTraceStepName(
-      currentNodeName,
+    yield* emitTraceLinksForRun(
+      this.getTraceContext(),
+      event,
       sourceEvent,
     );
-    if (activeSpan.name !== nextStepName) return;
-
-    const nextOwner = buildTraceOwnerFromSource({
-      runId: this.traceRunId ?? this.activeRun?.id,
-      stepName: nextStepName,
-      kind: this.classifyTraceStepKind(nextStepName),
-      event: sourceEvent,
-      owner: activeSpan.owner.parentKey
-        ? { parentKey: activeSpan.owner.parentKey }
-        : undefined,
-    });
-
-    if (nextOwner.key === activeSpan.owner.key) return;
-
-    yield* this.finishTraceSpan(activeSpan.name, sourceEvent);
-    yield* this.startTraceSpan(currentNodeName, sourceEvent);
   }
 
   // ── Message-in-progress tracking ──
 
   protected getMessageInProgress(runId: string): MessageInProgress | null {
-    return this.messagesInProgress[runId] ?? null;
+    return readMessageInProgress(this.messagesInProgress, runId);
   }
 
   protected setMessageInProgress(
     runId: string,
     value: MessageInProgress | null,
   ): void {
-    if (value === null) {
-      this.messagesInProgress[runId] = null;
-    } else {
-      const current = this.messagesInProgress[runId] ?? {};
-      this.messagesInProgress[runId] = {
-        ...current,
-        ...value,
-      } as MessageInProgress;
-    }
+    writeMessageInProgress(this.messagesInProgress, runId, value);
   }
 
   // ── Schema introspection (aligned with Python get_schema_keys) ──
@@ -746,9 +395,12 @@ export class LangGraphAgent {
     if (nodeName === "__end__") nodeName = null;
 
     if (nodeName !== this.activeRun.node_name) {
-      const currentTraceStepName = this.activeTraceSpan?.name;
+      const currentTraceAgentId = this.traceState.activeTraceSpan?.agentId;
       const nextTraceStepName = nodeName
         ? this.resolveTraceStepName(nodeName, sourceEvent)
+        : null;
+      const nextTraceAgentId = nodeName
+        ? this.resolveTraceAgentId(nodeName, sourceEvent)
         : null;
 
       // End current step
@@ -759,8 +411,8 @@ export class LangGraphAgent {
         } as BaseEvent);
         if (ev) yield ev;
         if (
-          currentTraceStepName &&
-          currentTraceStepName !== nextTraceStepName
+          currentTraceAgentId &&
+          currentTraceAgentId !== nextTraceAgentId
         ) {
           yield* this.finishTraceSpan(this.activeRun.node_name, sourceEvent);
         }
@@ -773,7 +425,7 @@ export class LangGraphAgent {
           stepName: nodeName,
         } as BaseEvent);
         if (ev) yield ev;
-        if (nextTraceStepName && nextTraceStepName !== currentTraceStepName) {
+        if (nextTraceStepName && nextTraceAgentId !== currentTraceAgentId) {
           yield* this.startTraceSpan(nodeName, sourceEvent);
         }
       }
@@ -785,122 +437,19 @@ export class LangGraphAgent {
   // ── Reasoning event handling (aligned with Python handle_reasoning_event) ──
 
   protected *handleReasoningEvent(
-    reasoningData: LangGraphReasoning | null,
+    reasoningData: import("./types.js").LangGraphReasoning | null,
     encryptedData: string | null,
     parentMessageId?: string | null,
   ): Generator<BaseEvent> {
-    if (!this.activeRun) return;
-
-    const reasoningProcess = this.activeRun.reasoning_process;
-
-    // Handle encrypted reasoning data
-    if (encryptedData && reasoningProcess) {
-      const ev = this._dispatchEvent({
-        type: EventType.REASONING_ENCRYPTED_VALUE,
-        subtype: "message",
-        entityId: reasoningProcess.message_id,
-        encryptedValue: encryptedData,
-      } as BaseEvent);
-      if (ev) yield ev;
-      return;
-    }
-
-    if (reasoningData) {
-      if (!reasoningData.type || reasoningData.text === undefined) return;
-
-      const reasoningStepIndex = reasoningData.index ?? 0;
-
-      // Check for reasoning index change (new reasoning block)
-      if (
-        reasoningProcess &&
-        reasoningProcess.index !== undefined &&
-        reasoningProcess.index !== reasoningStepIndex
-      ) {
-        const msgId = reasoningProcess.message_id ?? uuid();
-        if (reasoningProcess.type) {
-          const ev = this._dispatchEvent({
-            type: EventType.REASONING_MESSAGE_END,
-            messageId: msgId,
-          } as BaseEvent);
-          if (ev) yield ev;
-        }
-        const ev = this._dispatchEvent({
-          type: EventType.REASONING_END,
-          messageId: msgId,
-        } as BaseEvent);
-        if (ev) yield ev;
-        this.activeRun.reasoning_process = null;
-      }
-
-      // Start reasoning if not started
-      if (!this.activeRun.reasoning_process) {
-        const messageId = parentMessageId || uuid();
-        const ev = this._dispatchEvent({
-          type: EventType.REASONING_START,
-          messageId,
-        } as BaseEvent);
-        if (ev) yield ev;
-
-        this.activeRun.reasoning_process = {
-          index: reasoningStepIndex,
-          message_id: messageId,
-        };
-      }
-
-      // Start message if type changed
-      if (this.activeRun.reasoning_process!.type !== reasoningData.type) {
-        const ev = this._dispatchEvent({
-          type: EventType.REASONING_MESSAGE_START,
-          messageId: this.activeRun.reasoning_process!.message_id,
-          role: "reasoning",
-        } as BaseEvent);
-        if (ev) yield ev;
-        this.activeRun.reasoning_process!.type = reasoningData.type;
-      }
-
-      // Accumulate signature
-      if (reasoningData.signature) {
-        this.activeRun.reasoning_process!.signature = reasoningData.signature;
-      }
-
-      // Emit content
-      if (this.activeRun.reasoning_process!.type) {
-        const ev = this._dispatchEvent({
-          type: EventType.REASONING_MESSAGE_CONTENT,
-          messageId: this.activeRun.reasoning_process!.message_id,
-          delta: reasoningData.text,
-        } as BaseEvent);
-        if (ev) yield ev;
-      }
-    } else if (reasoningProcess) {
-      // Reasoning ended (no more reasoning data but process was active)
-      const msgId = reasoningProcess.message_id ?? uuid();
-
-      // Emit signature as encrypted value if accumulated
-      if (reasoningProcess.signature) {
-        const ev = this._dispatchEvent({
-          type: EventType.REASONING_ENCRYPTED_VALUE,
-          subtype: "message",
-          entityId: msgId,
-          encryptedValue: reasoningProcess.signature,
-        } as BaseEvent);
-        if (ev) yield ev;
-      }
-
-      const endMsgEv = this._dispatchEvent({
-        type: EventType.REASONING_MESSAGE_END,
-        messageId: msgId,
-      } as BaseEvent);
-      if (endMsgEv) yield endMsgEv;
-
-      const endEv = this._dispatchEvent({
-        type: EventType.REASONING_END,
-        messageId: msgId,
-      } as BaseEvent);
-      if (endEv) yield endEv;
-
-      this.activeRun.reasoning_process = null;
-    }
+    yield* handleReasoningEventForRun(
+      {
+        activeRun: this.activeRun,
+        dispatchEvent: (event) => this._dispatchEvent(event),
+      },
+      reasoningData,
+      encryptedData,
+      parentMessageId,
+    );
   }
 
   // ── State & messages snapshots (aligned with Python get_state_and_messages_snapshots) ──
@@ -983,7 +532,7 @@ export class LangGraphAgent {
     const threadId = input.threadId;
 
     // Get checkpoint messages
-    const checkpointMessages = snapshotMessages(agentState);
+    const checkpointMessages = getCheckpointMessages(agentState);
     stateInput.messages = checkpointMessages;
 
     const langchainMessages = aguiMessagesToLangchain(messages);
@@ -1009,77 +558,25 @@ export class LangGraphAgent {
     // Schema introspection
     this.activeRun.schema_keys = this.getSchemaKeys(config);
 
-    // Check for time-travel / regeneration
-    const nonSystemMessages = langchainMessages.filter(
-      (m) => !(m instanceof SystemMessage || m._getType?.() === "system"),
-    );
-
-    if (checkpointMessages.length > nonSystemMessages.length) {
-      const incomingNonToolIds = new Set(
-        langchainMessages
-          .filter(
-            (m) =>
-              m.id && !(m instanceof ToolMessage || m._getType?.() === "tool"),
-          )
-          .map((m) => m.id),
-      );
-      const checkpointIds = new Set(
-        checkpointMessages
-          .filter((message) => isRecord(message) && message.id)
-          .map((message) => (message as { id: unknown }).id),
-      );
-
-      const isContinuation =
-        incomingNonToolIds.size > 0 &&
-        [...incomingNonToolIds].every((id) => checkpointIds.has(id));
-
-      if (!isContinuation) {
-        // Look for last HumanMessage for potential regeneration
-        let lastUserMessage: BaseMessage | null = null;
-        for (let i = langchainMessages.length - 1; i >= 0; i--) {
-          if (
-            langchainMessages[i] instanceof HumanMessage ||
-            langchainMessages[i]._getType?.() === "human"
-          ) {
-            lastUserMessage = langchainMessages[i];
-            break;
-          }
-        }
-
-        if (lastUserMessage?.id && checkpointIds.has(lastUserMessage.id)) {
-          return this.prepareRegenerateStream(input, lastUserMessage, config);
-        }
-      }
+    const regenerationMessage = findRegenerationMessage({
+      checkpointMessages,
+      langchainMessages,
+    });
+    if (regenerationMessage) {
+      return this.prepareRegenerateStream(input, regenerationMessage, config);
     }
 
     // Handle active interrupts without resume
-    const eventsToDispatch: BaseEvent[] = [];
     if (hasActiveInterrupts && !resumeInput) {
-      eventsToDispatch.push({
-        type: EventType.RUN_STARTED,
-        threadId,
-        runId: this.activeRun.id,
-      } as BaseEvent);
-
-      for (const interrupt of interrupts) {
-        eventsToDispatch.push({
-          type: EventType.CUSTOM,
-          name: LangGraphEventTypes.OnInterrupt,
-          value: dumpJsonSafe(interrupt.value),
-        } as BaseEvent);
-      }
-
-      eventsToDispatch.push({
-        type: EventType.RUN_FINISHED,
-        threadId,
-        runId: this.activeRun.id,
-      } as BaseEvent);
-
       return {
         stream: null,
         state: null,
         config: null,
-        events_to_dispatch: eventsToDispatch,
+        events_to_dispatch: buildInterruptEvents({
+          activeRun: this.activeRun,
+          threadId,
+          interrupts,
+        }),
       };
     }
 
@@ -1098,19 +595,13 @@ export class LangGraphAgent {
     }
 
     // Build stream input
-    let streamInput: unknown;
-    if (resumeInput) {
-      streamInput = new Command({ resume: resumeInput });
-    } else {
-      const payloadInput = getStreamPayloadInput({
-        mode: this.activeRun.mode ?? "start",
-        state,
-        schemaKeys: this.activeRun.schema_keys ?? undefined,
-      });
-      streamInput = payloadInput
-        ? { ...forwardedProps, ...payloadInput }
-        : null;
-    }
+    const streamInput = buildPreparedStreamInput({
+      activeRun: this.activeRun,
+      forwardedProps,
+      resumeInput,
+      state,
+      schemaKeys: this.activeRun.schema_keys ?? undefined,
+    });
 
     const subgraphsEnabled = forwardedProps.stream_subgraphs !== false;
 
@@ -1243,32 +734,8 @@ export class LangGraphAgent {
     const frontendToolNames = new Set(frontendTools.map((t) => t.name));
     const forwardedProps = input.forwarded_props ?? {};
 
-    this.activeRun = {
-      id: runId,
-      thread_id: threadId,
-      mode: "start",
-      node_name: null,
-      prev_node_name: null,
-      has_function_streaming: false,
-      streamed_tool_call_ids: new Set<string>(),
-      model_made_tool_call: false,
-      state_reliable: true,
-      reasoning_process: null,
-      manually_emitted_state: null,
-      wait_for_frontend_tool: false,
-    };
-    this.traceRunId = runId;
-    this.activeTraceSpan = null;
-    this.lastSupervisorSpanId = undefined;
-    this.lastSupervisorOwnerKey = undefined;
-    this.traceSpanCounters.clear();
-    this.linkedTraceMessages.clear();
-    this.linkedTraceTools.clear();
-    this.traceSpans.clear();
-    this.traceOwners.clear();
-    this.traceOwnerSpans.clear();
-    this.traceMessageOwners.clear();
-    this.traceToolOwners.clear();
+    this.activeRun = createRunMetadata({ runId, threadId });
+    resetTraceState(this.traceState);
 
     for (const plugin of this.plugins) {
       plugin.onRunStart?.(this.getPluginContext());
@@ -1370,19 +837,22 @@ export class LangGraphAgent {
           subgraphInfo.currentSubgraph !== this.currentSubgraph
         ) {
           const currentNodeName = this.activeRun.node_name;
-          const previousTraceStepName = this.getActiveTraceStepName();
+          const previousTraceAgentId = this.traceState.activeTraceSpan?.agentId;
           this.currentSubgraph =
             subgraphInfo.currentSubgraph ?? ROOT_SUBGRAPH_NAME;
           const nextTraceStepName = currentNodeName
             ? this.resolveTraceStepName(currentNodeName, event)
             : null;
+          const nextTraceAgentId = currentNodeName
+            ? this.resolveTraceAgentId(currentNodeName, event)
+            : null;
 
           if (
             currentNodeName &&
-            previousTraceStepName &&
-            previousTraceStepName !== nextTraceStepName
+            previousTraceAgentId &&
+            previousTraceAgentId !== nextTraceAgentId
           ) {
-            yield* this.finishTraceSpan(previousTraceStepName, event);
+            yield* this.finishTraceSpan(currentNodeName, event);
             if (nextTraceStepName) {
               yield* this.startTraceSpan(currentNodeName, event);
             }
@@ -1414,6 +884,7 @@ export class LangGraphAgent {
         if (typeof eventRunId === "string" && eventRunId) {
           this.activeRun.id = eventRunId;
         }
+
         let exitingNode = false;
 
         if (
@@ -1444,8 +915,6 @@ export class LangGraphAgent {
           )) {
             yield stepEvent;
           }
-        } else if (currentNodeName) {
-          yield* this.handleTraceOwnerBoundary(currentNodeName, event);
         }
 
         markPredictStateToolIfNeeded(event, this.activeRun);
@@ -1561,18 +1030,7 @@ export class LangGraphAgent {
       for (const plugin of this.plugins) {
         plugin.onRunFinish?.(this.getPluginContext());
       }
-      this.activeTraceSpan = null;
-      this.traceRunId = null;
-      this.lastSupervisorSpanId = undefined;
-      this.lastSupervisorOwnerKey = undefined;
-      this.traceSpanCounters.clear();
-      this.linkedTraceMessages.clear();
-      this.linkedTraceTools.clear();
-      this.traceSpans.clear();
-      this.traceOwners.clear();
-      this.traceOwnerSpans.clear();
-      this.traceMessageOwners.clear();
-      this.traceToolOwners.clear();
+      resetTraceState(this.traceState);
       this.activeRun = null;
     }
   }
@@ -1593,7 +1051,7 @@ export class LangGraphAgent {
       getMessageInProgress: (id) => this.getMessageInProgress(id),
       setMessageInProgress: (id, value) => this.setMessageInProgress(id, value),
       clearMessageInProgress: (id) => {
-        this.messagesInProgress[id] = null;
+        clearMessageInProgress(this.messagesInProgress, id);
       },
       dispatchEvent: (ev) => this._dispatchEvent(ev),
       handleReasoningEvent: (reasoningData, encryptedData, parentMessageId) =>
@@ -1603,9 +1061,17 @@ export class LangGraphAgent {
           parentMessageId,
         ),
     })) {
-      const enrichedEvent = this.attachTraceOwnerToEvent(agUiEvent);
-      yield enrichedEvent;
-      yield* this.emitTraceLinksForEvent(enrichedEvent, event);
+      // Stamp agent attribution (`agentId` / `agentName`) onto the event
+      // in place BEFORE yielding, so downstream consumers see every event
+      // already carrying its owning sub-agent. The helper is a Generator
+      // for call-site symmetry but emits no events in v2 — the `for` loop
+      // is what drives the in-place mutation.
+      for (const _ of this.emitTraceLinksForEvent(agUiEvent, event)) {
+        // Unreachable in v2 — kept as a safety drain in case future
+        // versions reintroduce out-of-band trace events.
+        yield _;
+      }
+      yield agUiEvent;
     }
   }
 }

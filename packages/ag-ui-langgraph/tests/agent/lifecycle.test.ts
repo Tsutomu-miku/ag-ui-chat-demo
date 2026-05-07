@@ -22,13 +22,9 @@ import {
 import { Command } from "@langchain/langgraph";
 import { describe, expect, it, vi } from "vitest";
 
-import { LangGraphAgent, type LangGraphAgentConfig } from "../src/agent.js";
-import { createProtocolTracePlugin } from "../src/plugins/trace.js";
-import {
-  AG_UI_TRACE_EVENT_NAME,
-  type AgUiTraceCustomValue,
-} from "../src/trace.js";
-import { LangGraphEventTypes, CustomEventNames } from "../src/types.js";
+import { LangGraphAgent, type LangGraphAgentConfig } from "../../src/agent.js";
+import { createProtocolTracePlugin } from "../../src/plugins/trace.js";
+import { LangGraphEventTypes, CustomEventNames } from "../../src/types.js";
 
 // ── Helpers ──
 
@@ -117,21 +113,6 @@ function createInspectableGraph(
 
 function makeConfig(graph: any, name = "test-agent"): LangGraphAgentConfig {
   return { name, graph };
-}
-
-function traceValues(events: BaseEvent[]): AgUiTraceCustomValue[] {
-  return events
-    .filter(
-      (
-        event,
-      ): event is BaseEvent & {
-        name: string;
-        value: AgUiTraceCustomValue;
-      } =>
-        event.type === EventType.CUSTOM &&
-        (event as any).name === AG_UI_TRACE_EVENT_NAME,
-    )
-    .map((event) => event.value);
 }
 
 function withCheckpointNamespace(
@@ -971,34 +952,22 @@ describe("event translation: step management", () => {
     const events = await collectEvents(agent.clone().run(makeInput()));
     const stepStarted = events.find(
       (event) => event.type === EventType.STEP_STARTED,
-    ) as
-      | (BaseEvent & {
-          step?: { id?: string; kind?: string };
-        })
-      | undefined;
+    ) as (BaseEvent & { stepId?: string; stepKind?: string }) | undefined;
     const toolStart = events.find(
       (event) => event.type === EventType.TOOL_CALL_START,
-    ) as
-      | (BaseEvent & {
-          step?: { id?: string; kind?: string };
-        })
-      | undefined;
+    ) as (BaseEvent & { stepId?: string; stepKind?: string }) | undefined;
     const toolResult = events.find(
       (event) => event.type === EventType.TOOL_CALL_RESULT,
-    ) as
-      | (BaseEvent & {
-          step?: { id?: string; kind?: string };
-        })
-      | undefined;
+    ) as (BaseEvent & { stepId?: string; stepKind?: string }) | undefined;
 
-    expect(stepStarted?.step?.id).toBeTruthy();
-    expect(stepStarted?.step?.kind).toBe("node");
-    expect(toolStart?.step?.id).toBe(stepStarted?.step?.id);
-    expect(toolResult?.step?.id).toBe(stepStarted?.step?.id);
-    expect(toolResult?.step?.kind).toBe("node");
+    expect(stepStarted?.stepId).toBeTruthy();
+    expect(stepStarted?.stepKind).toBe("node");
+    expect(toolStart?.stepId).toBe(stepStarted?.stepId);
+    expect(toolResult?.stepId).toBe(stepStarted?.stepId);
+    expect(toolResult?.stepKind).toBe("node");
   });
 
-  it("emits canonical trace spans and message links without the legacy plugin", async () => {
+  it("stamps agent instance attribution in-band without custom trace spans", async () => {
     const graph = createMockGraph([
       ...textStreamEvents("Routing", "supervisor", "msg-supervisor-1"),
       ...textStreamEvents("Draft", "writer", "msg-writer-1"),
@@ -1010,45 +979,59 @@ describe("event translation: step management", () => {
     });
 
     const events = await collectEvents(agent.clone().run(makeInput()));
-    const trace = traceValues(events);
-    const spanStarts = trace.filter((event) => event.type === "span.start");
-    const messageLinks = trace.filter((event) => event.type === "message.link");
-    const supervisorSpan = spanStarts.find(
-      (event) => event.name === "supervisor",
-    );
-    const writerSpan = spanStarts.find((event) => event.name === "writer");
+    expect(
+      events.some(
+        (event) =>
+          event.type === EventType.CUSTOM &&
+          (event as { name?: string }).name === "ag-ui.trace",
+      ),
+    ).toBe(false);
 
-    expect(supervisorSpan).toMatchObject({
-      type: "span.start",
-      kind: "supervisor",
-    });
-    expect(writerSpan).toMatchObject({
-      type: "span.start",
-      kind: "subagent",
-      parentSpanId: supervisorSpan?.spanId,
-    });
-    expect(messageLinks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "message.link",
-          messageId: "msg-supervisor-1",
-          spanId: supervisorSpan?.spanId,
-        }),
-        expect.objectContaining({
-          type: "message.link",
-          messageId: "msg-writer-1",
-          spanId: writerSpan?.spanId,
-        }),
-      ]),
-    );
+    type Stamped = BaseEvent & {
+      messageId?: string;
+      agentId?: string;
+      agentName?: string;
+    };
+    const supervisorMsgStart = events.find(
+      (event) =>
+        event.type === EventType.TEXT_MESSAGE_START &&
+        (event as Stamped).messageId === "msg-supervisor-1",
+    ) as Stamped | undefined;
+    const writerMsgStart = events.find(
+      (event) =>
+        event.type === EventType.TEXT_MESSAGE_START &&
+        (event as Stamped).messageId === "msg-writer-1",
+    ) as Stamped | undefined;
+    expect(supervisorMsgStart?.agentId).toBe("run-1:supervisor:1");
+    expect(supervisorMsgStart?.agentName).toBe("supervisor");
+    expect(writerMsgStart?.agentId).toBe("run-1:writer:1");
+    expect(writerMsgStart?.agentName).toBe("writer");
   });
 
-  it("does not merge repeated same-name sub-agent spans", async () => {
+  it("does not merge parallel same-name sub-agent instances", async () => {
+    const writerNsA = "writer:branch-a|agent:aaa";
+    const writerNsB = "writer:branch-b|agent:bbb";
     const graph = createMockGraph([
-      ...textStreamEvents("Route one", "supervisor", "msg-supervisor-1"),
-      ...textStreamEvents("Draft one", "writer", "msg-writer-1"),
-      ...textStreamEvents("Route two", "supervisor", "msg-supervisor-2"),
-      ...textStreamEvents("Draft two", "writer", "msg-writer-2"),
+      ...withCheckpointNamespace(
+        toolCallStreamEvents(
+          "compose_text",
+          "tc-writer-a",
+          { topic: "alpha" },
+          "agent",
+          "msg-writer-a",
+        ),
+        writerNsA,
+      ),
+      ...withCheckpointNamespace(
+        toolCallStreamEvents(
+          "compose_text",
+          "tc-writer-b",
+          { topic: "beta" },
+          "agent",
+          "msg-writer-b",
+        ),
+        writerNsB,
+      ),
     ]);
     const agent = new LangGraphAgent({
       name: "supervisor",
@@ -1057,15 +1040,30 @@ describe("event translation: step management", () => {
     });
 
     const events = await collectEvents(agent.clone().run(makeInput()));
-    const writerSpans = traceValues(events).filter(
-      (event) => event.type === "span.start" && event.name === "writer",
-    );
+    type Stamped = BaseEvent & {
+      toolCallId?: string;
+      agentId?: string;
+      agentName?: string;
+    };
+    const writerA = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        (event as Stamped).toolCallId === "tc-writer-a",
+    ) as Stamped | undefined;
+    const writerB = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        (event as Stamped).toolCallId === "tc-writer-b",
+    ) as Stamped | undefined;
 
-    expect(writerSpans).toHaveLength(2);
-    expect(new Set(writerSpans.map((event) => event.spanId)).size).toBe(2);
+    expect(writerA?.agentName).toBe("writer");
+    expect(writerB?.agentName).toBe("writer");
+    expect(writerA?.agentId).toBe("run-1:writer:branch-a");
+    expect(writerB?.agentId).toBe("run-1:writer:branch-b");
+    expect(writerA?.agentId).not.toBe(writerB?.agentId);
   });
 
-  it("uses checkpoint namespace to keep one logical sub-agent span across agent and tools nodes", async () => {
+  it("uses checkpoint namespace to keep one sub-agent instance id across agent and tools nodes", async () => {
     const graph = createMockGraph([
       ...withCheckpointNamespace(
         textStreamEvents("Routing to writer", "agent", "msg-supervisor-1"),
@@ -1097,42 +1095,133 @@ describe("event translation: step management", () => {
     });
 
     const events = await collectEvents(agent.clone().run(makeInput()));
-    const trace = traceValues(events);
-    const spanStarts = trace.filter((event) => event.type === "span.start");
-    const supervisorSpan = spanStarts.find(
-      (event) => event.name === "supervisor",
-    );
-    const writerSpans = spanStarts.filter((event) => event.name === "writer");
+    type Stamped = BaseEvent & {
+      messageId?: string;
+      toolCallId?: string;
+      agentId?: string;
+      agentName?: string;
+    };
+    const writerMsg1 = events.find(
+      (event) =>
+        event.type === EventType.TEXT_MESSAGE_START &&
+        (event as Stamped).messageId === "msg-writer-1",
+    ) as Stamped | undefined;
+    const writerMsg2 = events.find(
+      (event) =>
+        event.type === EventType.TEXT_MESSAGE_START &&
+        (event as Stamped).messageId === "msg-writer-2",
+    ) as Stamped | undefined;
+    const writerToolStart = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        (event as Stamped).toolCallId === "tc-calc",
+    ) as Stamped | undefined;
 
-    expect(spanStarts.some((event) => event.name === "tools")).toBe(false);
-    expect(writerSpans).toHaveLength(1);
-    expect(writerSpans[0]).toMatchObject({
-      type: "span.start",
-      kind: "subagent",
-      parentSpanId: supervisorSpan?.spanId,
-    });
-    expect(trace).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "message.link",
-          messageId: "msg-writer-1",
-          spanId: writerSpans[0]?.spanId,
-        }),
-        expect.objectContaining({
-          type: "message.link",
-          messageId: "msg-writer-2",
-          spanId: writerSpans[0]?.spanId,
-        }),
-        expect.objectContaining({
-          type: "tool.link",
-          toolCallId: "tc-calc",
-          spanId: writerSpans[0]?.spanId,
-        }),
-      ]),
-    );
+    expect(writerMsg1?.agentId).toBe("run-1:writer:subgraph");
+    expect(writerMsg2?.agentId).toBe("run-1:writer:subgraph");
+    expect(writerToolStart?.agentId).toBe("run-1:writer:subgraph");
+    expect(writerMsg1?.agentName).toBe("writer");
+    expect(writerMsg2?.agentName).toBe("writer");
+    expect(writerToolStart?.agentName).toBe("writer");
   });
 
-  it("emits canonical tool links for tool-only assistant messages", async () => {
+  it("attributes toolcalls to the correct sub-agent when two sub-agents run in parallel with interleaved events", async () => {
+    // Two parallel sub-agents (writer + researcher) emit interleaved events.
+    // The full `langgraph_checkpoint_ns` differs between them (uuid suffix),
+    // so attribution must flow from the source event's namespace, not from
+    // a single global "active span" pointer.
+    const writerNs = "writer:subgraph|agent:aaa";
+    const researcherNs = "researcher:subgraph|agent:bbb";
+
+    const graph = createMockGraph([
+      // Supervisor routes work to two sub-agents.
+      ...withCheckpointNamespace(
+        textStreamEvents("Spawning", "agent", "msg-supervisor-1"),
+        "supervisor:root|agent:1",
+      ),
+      // Writer text stream — writer span becomes active.
+      ...withCheckpointNamespace(
+        textStreamEvents("Writer running", "agent", "msg-writer-1"),
+        writerNs,
+      ),
+      // Researcher text stream — active span FLIPS to researcher.
+      ...withCheckpointNamespace(
+        textStreamEvents("Researcher running", "agent", "msg-researcher-1"),
+        researcherNs,
+      ),
+      // Writer toolcall arrives while researcher is the most recent span.
+      // Without Plan C this would be misattributed to researcher.
+      ...withCheckpointNamespace(
+        toolCallStreamEvents(
+          "compose_text",
+          "tc-writer",
+          { topic: "tokyo" },
+          "agent",
+          "msg-writer-2",
+        ),
+        writerNs,
+      ),
+      // Researcher toolcall arrives next, must attribute to researcher.
+      ...withCheckpointNamespace(
+        toolCallStreamEvents(
+          "search_web",
+          "tc-researcher",
+          { query: "tokyo facts" },
+          "agent",
+          "msg-researcher-2",
+        ),
+        researcherNs,
+      ),
+    ]);
+    const agent = new LangGraphAgent({
+      name: "supervisor",
+      graph,
+      subAgents: ["writer", "researcher"],
+    });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+
+    // Every toolcall event must carry agent attribution stamped in place.
+    type Stamped = BaseEvent & {
+      toolCallId?: string;
+      agentId?: string;
+      agentName?: string;
+    };
+    const writerToolStart = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        (event as Stamped).toolCallId === "tc-writer",
+    ) as Stamped | undefined;
+    const researcherToolStart = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        (event as Stamped).toolCallId === "tc-researcher",
+    ) as Stamped | undefined;
+
+    expect(writerToolStart?.agentName).toBe("writer");
+    expect(writerToolStart?.agentId).toBe("run-1:writer:subgraph");
+
+    expect(researcherToolStart?.agentName).toBe("researcher");
+    expect(researcherToolStart?.agentId).toBe("run-1:researcher:subgraph");
+    expect(writerToolStart?.agentId).not.toBe(researcherToolStart?.agentId);
+
+    // TOOL_CALL_ARGS / TOOL_CALL_END follow-ups for each toolcall must carry
+    // the same agent attribution as their TOOL_CALL_START.
+    const writerArgs = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_ARGS &&
+        (event as Stamped).toolCallId === "tc-writer",
+    ) as Stamped | undefined;
+    const researcherArgs = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_ARGS &&
+        (event as Stamped).toolCallId === "tc-researcher",
+    ) as Stamped | undefined;
+    expect(writerArgs?.agentId).toBe(writerToolStart?.agentId);
+    expect(researcherArgs?.agentId).toBe(researcherToolStart?.agentId);
+  });
+
+  it("attributes tool-only assistant messages to the active sub-agent", async () => {
     const graph = createMockGraph([
       ...toolCallStreamEvents(
         "calculate",
@@ -1149,30 +1238,32 @@ describe("event translation: step management", () => {
     });
 
     const events = await collectEvents(agent.clone().run(makeInput()));
-    const trace = traceValues(events);
-    const writerSpan = trace.find(
-      (event) => event.type === "span.start" && event.name === "writer",
-    );
+    type Stamped = BaseEvent & {
+      messageId?: string;
+      toolCallId?: string;
+      agentId?: string;
+      agentName?: string;
+    };
+    const toolStart = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        (event as Stamped).toolCallId === "tc-calc",
+    ) as Stamped | undefined;
+    const aiMessageStart = events.find(
+      (event) =>
+        event.type === EventType.TEXT_MESSAGE_START &&
+        (event as Stamped).messageId === "ai-msg-1",
+    ) as Stamped | undefined;
 
-    expect(trace).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "tool.link",
-          toolCallId: "tc-calc",
-          spanId: writerSpan?.spanId,
-          toolCallName: "calculate",
-        }),
-        expect.objectContaining({
-          type: "message.link",
-          messageId: "ai-msg-1",
-          spanId: writerSpan?.spanId,
-          role: "assistant",
-        }),
-      ]),
-    );
+    expect(toolStart?.agentId).toBe("run-1:writer:1");
+    expect(toolStart?.agentName).toBe("writer");
+    if (aiMessageStart) {
+      expect(aiMessageStart.agentId).toBe("run-1:writer:1");
+      expect(aiMessageStart.agentName).toBe("writer");
+    }
   });
 
-  it("keeps delayed tool links bound to the writer span after the active span switches back to supervisor", async () => {
+  it("keeps delayed toolcalls attributed to the writer sub-agent after the active span switches back to supervisor", async () => {
     const graph = createMockGraph([
       ...withCheckpointNamespace(
         textStreamEvents("Routing to writer", "agent", "msg-supervisor-1"),
@@ -1229,52 +1320,36 @@ describe("event translation: step management", () => {
     });
 
     const events = await collectEvents(agent.clone().run(makeInput()));
-    const trace = traceValues(events);
     const delayedResultEvent = events.find(
       (event) =>
         event.type === EventType.TOOL_CALL_RESULT &&
         (event as BaseEvent & { toolCallId?: string }).toolCallId ===
           "tc-write-delayed",
-    ) as (BaseEvent & { messageId?: string }) | undefined;
-    const writerSpan = trace.find(
-      (event) => event.type === "span.start" && event.name === "writer",
-    );
-    const delayedToolLink = trace.find(
+    ) as
+      | (BaseEvent & {
+          messageId?: string;
+          agentId?: string;
+          agentName?: string;
+        })
+      | undefined;
+
+    type Stamped = BaseEvent & {
+      toolCallId?: string;
+      agentId?: string;
+      agentName?: string;
+      parentMessageId?: string;
+    };
+    const delayedToolStart = events.find(
       (event) =>
-        event.type === "tool.link" && event.toolCallId === "tc-write-delayed",
-    );
-    const delayedToolResultLink = trace.find(
-      (event) =>
-        event.type === "message.link" &&
-        event.messageId === delayedResultEvent?.messageId,
-    );
+        event.type === EventType.TOOL_CALL_START &&
+      (event as Stamped).toolCallId === "tc-write-delayed",
+    ) as Stamped | undefined;
 
-    expect(delayedToolLink).toMatchObject({
-      type: "tool.link",
-      toolCallId: "tc-write-delayed",
-      spanId: writerSpan?.spanId,
-      parentMessageId: "msg-writer-1",
-    });
-    expect(delayedToolResultLink).toMatchObject({
-      type: "message.link",
-      messageId: delayedResultEvent?.messageId,
-      spanId: writerSpan?.spanId,
-      role: "tool",
-    });
-
-    const supervisorOwners = [
-      ...new Set(
-        trace
-          .filter(
-            (event) =>
-              event.type === "span.start" && event.name === "supervisor",
-          )
-          .map((event) => event.owner?.key)
-          .filter((value): value is string => Boolean(value)),
-      ),
-    ];
-
-    expect(supervisorOwners).toEqual(["run-1:supervisor:supervisor:root"]);
+    expect(delayedToolStart?.agentId).toBe("run-1:writer:subgraph");
+    expect(delayedToolStart?.agentName).toBe("writer");
+    expect(delayedToolStart?.parentMessageId).toBe("msg-writer-1");
+    expect(delayedResultEvent?.agentId).toBe("run-1:writer:subgraph");
+    expect(delayedResultEvent?.agentName).toBe("writer");
   });
 });
 

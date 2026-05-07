@@ -21,11 +21,6 @@ export type {
   PendingToolCall,
   ActiveStep,
   ThreadAgentEvent,
-  AgUiTraceEvent,
-} from "./types.js";
-export {
-  AG_UI_TRACE_EVENT_NAME,
-  AG_UI_TRACE_PROTOCOL_VERSION,
 } from "./types.js";
 
 // ── Pure state reducer ──

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { AG_UI_TRACE_EVENT_NAME } from "ag-ui-react";
 import type { ChatMessage, TraceEvent } from "ag-ui-react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -222,7 +221,7 @@ describe("AgentTraceView ordering", () => {
     ]);
   });
 
-  it("renders canonical tool links even when only a tool result message is linked", () => {
+  it("renders in-band tool links even when only a tool result message is linked", () => {
     const messages: ChatMessage[] = [
       {
         id: "tool-result-1",
@@ -234,31 +233,16 @@ describe("AgentTraceView ordering", () => {
     ];
     const traceEvents: TraceEvent[] = [
       {
-        type: "CUSTOM",
-        name: "ag-ui.trace",
-        value: {
-          version: 1,
-          type: "span.start",
-          spanId: "span-researcher-1",
-          name: "researcher",
-          kind: "subagent",
-          parentSpanId: "span-supervisor-1",
-        },
-      },
-      {
-        type: "CUSTOM",
-        name: "ag-ui.trace",
-        value: {
-          version: 1,
-          type: "tool.link",
-          toolCallId: "tool-search-1",
-          toolCallName: "search_web",
-          spanId: "span-researcher-1",
-        },
-      },
+        type: "TOOL_CALL_RESULT",
+        toolCallId: "tool-search-1",
+        toolCallName: "search_web",
+        messageId: "tool-result-1",
+        agentId: "agent-researcher-1",
+        agentName: "researcher",
+      } as TraceEvent & { agentId: string; agentName: string },
     ];
     const traceData = buildAgentTraceData(messages, [], traceEvents);
-    const researcher = traceData?.nodes["span-researcher-1"];
+    const researcher = traceData?.nodes["agent-researcher-1"];
 
     const renderItems = buildAgentRenderItems(
       researcher!,
@@ -393,7 +377,7 @@ describe("AgentTraceView ordering", () => {
     expect(markup).not.toContain("&quot;input&quot;");
   });
 
-  it("interleaves canonical parent execution, sub-agent work, and parent summary", () => {
+  it("keeps flat in-band parent execution and sub-agent work grouped by agentId", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-supervisor-1", "Routing to writer"),
@@ -418,72 +402,56 @@ describe("AgentTraceView ordering", () => {
     const traceEvents: TraceEvent[] = [
       {
         type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
+        name: "ag-ui.trace",
         value: {
-          version: 1,
+          version: 2,
           type: "span.start",
-          spanId: "span-supervisor-1",
-          name: "supervisor",
+          agentId: "agent-supervisor-1",
+          agentName: "supervisor",
           kind: "supervisor",
         },
       },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-supervisor-1",
-          spanId: "span-supervisor-1",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-supervisor-1",
+        agentId: "agent-supervisor-1",
+        agentName: "supervisor",
+      } as TraceEvent & { agentId: string; agentName: string },
+      {
+        type: "TOOL_CALL_START",
+        toolCallId: "tool-transfer-writer",
+        toolCallName: "transfer_to_writer",
+        parentMessageId: "assistant-supervisor-1",
+        agentId: "agent-supervisor-1",
+        agentName: "supervisor",
+      } as TraceEvent & { agentId: string; agentName: string },
       {
         type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
+        name: "ag-ui.trace",
         value: {
-          version: 1,
-          type: "tool.link",
-          toolCallId: "tool-transfer-writer",
-          toolCallName: "transfer_to_writer",
-          parentMessageId: "assistant-supervisor-1",
-          spanId: "span-supervisor-1",
-        },
-      },
-      {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
+          version: 2,
           type: "span.start",
-          spanId: "span-writer-1",
-          name: "writer",
+          agentId: "agent-writer-1",
+          agentName: "writer",
           kind: "subagent",
-          parentSpanId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
         },
       },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-writer-1",
-          spanId: "span-writer-1",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-writer-1",
+        agentId: "agent-writer-1",
+        agentName: "writer",
+      } as TraceEvent & { agentId: string; agentName: string },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-supervisor-2",
-          spanId: "span-supervisor-1",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-supervisor-2",
+        agentId: "agent-supervisor-1",
+        agentName: "supervisor",
+      } as TraceEvent & { agentId: string; agentName: string },
     ];
     const traceData = buildAgentTraceData(messages, [], traceEvents);
-    const supervisor = traceData?.nodes["span-supervisor-1"];
+    const supervisor = traceData?.nodes["agent-supervisor-1"];
 
     const renderItems = buildAgentRenderItems(
       supervisor!,
@@ -501,12 +469,16 @@ describe("AgentTraceView ordering", () => {
       ),
     ).toEqual([
       "assistant-supervisor-1",
-      'child:span-writer-1:{"task":"draft"}',
+      'child:agent-writer-1:{"task":"draft"}',
       "assistant-supervisor-2",
+    ]);
+    expect(supervisor?.childStepIds).toEqual(["agent-writer-1"]);
+    expect(traceData?.nodes["agent-writer-1"]?.messages.map((m) => m.id)).toEqual([
+      "assistant-writer-1",
     ]);
   });
 
-  it("does not render a delegated handoff tool twice when it anchors a child agent", () => {
+  it("renders delegated handoff tools when no parent relation anchors a child agent", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-supervisor-1", "Routing to writer"),
@@ -527,59 +499,47 @@ describe("AgentTraceView ordering", () => {
     const traceEvents: TraceEvent[] = [
       {
         type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
+        name: "ag-ui.trace",
         value: {
-          version: 1,
+          version: 2,
           type: "span.start",
-          spanId: "span-supervisor-1",
-          name: "supervisor",
+          agentId: "agent-supervisor-1",
+          agentName: "supervisor",
           kind: "supervisor",
         },
       },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-supervisor-1",
-          spanId: "span-supervisor-1",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-supervisor-1",
+        agentId: "agent-supervisor-1",
+        agentName: "supervisor",
+      } as TraceEvent & { agentId: string; agentName: string },
+      {
+        type: "TOOL_CALL_START",
+        toolCallId: "tool-transfer-writer",
+        toolCallName: "transfer_to_writer",
+        parentMessageId: "assistant-supervisor-1",
+        agentId: "agent-supervisor-1",
+        agentName: "supervisor",
+      } as TraceEvent & { agentId: string; agentName: string },
       {
         type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
+        name: "ag-ui.trace",
         value: {
-          version: 1,
-          type: "tool.link",
-          toolCallId: "tool-transfer-writer",
-          toolCallName: "transfer_to_writer",
-          parentMessageId: "assistant-supervisor-1",
-          spanId: "span-supervisor-1",
-        },
-      },
-      {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
+          version: 2,
           type: "span.start",
-          spanId: "span-writer-1",
-          name: "writer",
+          agentId: "agent-writer-1",
+          agentName: "writer",
           kind: "subagent",
-          parentSpanId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
         },
       },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-writer-1",
-          spanId: "span-writer-1",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-writer-1",
+        agentId: "agent-writer-1",
+        agentName: "writer",
+      } as TraceEvent & { agentId: string; agentName: string },
     ];
 
     const markup = renderToStaticMarkup(
@@ -591,9 +551,59 @@ describe("AgentTraceView ordering", () => {
       }),
     );
 
+    expect(markup).toContain("Sub-agent of Supervisor");
+    expect(markup).toContain("Supervisor -&gt; Writer");
+    expect(markup).toContain("{\n  &quot;task&quot;: &quot;draft&quot;\n}");
     expect(markup).not.toContain("Handoff -&gt; Writer");
     expect(markup).toContain("Writer output");
-    expect(markup).toContain("&quot;task&quot;: &quot;draft&quot;");
+  });
+
+  it("indents unparented sub-agent modules by default", () => {
+    const messages: ChatMessage[] = [
+      {
+        ...assistantMessage("assistant-writer-progress", "Working..."),
+        stepId: "writer",
+        stepName: "writer",
+      },
+      {
+        ...assistantMessage("assistant-writer-final", "Draft complete"),
+        stepId: "writer",
+        stepName: "writer",
+      },
+    ];
+    const traceEvents: TraceEvent[] = [
+      {
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-writer-progress",
+        stepId: "writer",
+        stepName: "writer",
+        agentId: "run-1:writer:branch-a",
+        agentName: "writer",
+      } as TraceEvent & { agentId: string; agentName: string },
+      {
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-writer-final",
+        stepId: "writer",
+        stepName: "writer",
+        agentId: "run-1:writer:branch-a",
+        agentName: "writer",
+      } as TraceEvent & { agentId: string; agentName: string },
+    ];
+
+    const markup = renderToStaticMarkup(
+      createElement(AgentTraceView, {
+        messages,
+        activeSteps: [],
+        traceEvents,
+        toolResultById: new Map(),
+      }),
+    );
+
+    expect(markup).toContain("agent-node depth-1");
+    expect(markup).toContain("Sub-agent");
+    expect(markup).toContain("Working...");
+    expect(markup).toContain("Draft complete");
+    expect(markup.match(/class="agent-node /g)).toHaveLength(1);
   });
 
   it("renders explicit hierarchy labels for root and child agents", () => {
@@ -659,7 +669,7 @@ describe("AgentTraceView ordering", () => {
     expect(markup).not.toContain("Delegated branch");
   });
 
-  it("merges supervisor continuation spans into the same parent sequence", () => {
+  it("keeps supervisor continuation entries separate when agentId changes", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-supervisor-1", "Routing to writer"),
@@ -684,117 +694,90 @@ describe("AgentTraceView ordering", () => {
     const traceEvents: TraceEvent[] = [
       {
         type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
+        name: "ag-ui.trace",
         value: {
-          version: 1,
+          version: 2,
           type: "span.start",
-          spanId: "span-supervisor-1",
-          name: "supervisor",
+          agentId: "agent-supervisor-1",
+          agentName: "supervisor",
           kind: "supervisor",
         },
       },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-supervisor-1",
-          spanId: "span-supervisor-1",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-supervisor-1",
+        agentId: "agent-supervisor-1",
+        agentName: "supervisor",
+      } as TraceEvent & { agentId: string; agentName: string },
+      {
+        type: "TOOL_CALL_START",
+        toolCallId: "tool-transfer-writer",
+        toolCallName: "transfer_to_writer",
+        parentMessageId: "assistant-supervisor-1",
+        agentId: "agent-supervisor-1",
+        agentName: "supervisor",
+      } as TraceEvent & { agentId: string; agentName: string },
       {
         type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
+        name: "ag-ui.trace",
         value: {
-          version: 1,
-          type: "tool.link",
-          toolCallId: "tool-transfer-writer",
-          toolCallName: "transfer_to_writer",
-          parentMessageId: "assistant-supervisor-1",
-          spanId: "span-supervisor-1",
-        },
-      },
-      {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
+          version: 2,
           type: "span.end",
-          spanId: "span-supervisor-1",
+          agentId: "agent-supervisor-1",
         },
       },
       {
         type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
+        name: "ag-ui.trace",
         value: {
-          version: 1,
+          version: 2,
           type: "span.start",
-          spanId: "span-writer-1",
-          name: "writer",
+          agentId: "agent-writer-1",
+          agentName: "writer",
           kind: "subagent",
-          parentSpanId: "span-supervisor-1",
+          parentAgentId: "agent-supervisor-1",
         },
       },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-writer-1",
-          spanId: "span-writer-1",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-writer-1",
+        agentId: "agent-writer-1",
+        agentName: "writer",
+      } as TraceEvent & { agentId: string; agentName: string },
       {
         type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
+        name: "ag-ui.trace",
         value: {
-          version: 1,
+          version: 2,
           type: "span.start",
-          spanId: "span-supervisor-2",
-          name: "supervisor",
+          agentId: "agent-supervisor-2",
+          agentName: "supervisor",
           kind: "supervisor",
         },
       },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-supervisor-2",
-          spanId: "span-supervisor-2",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-supervisor-2",
+        agentId: "agent-supervisor-2",
+        agentName: "supervisor",
+      } as TraceEvent & { agentId: string; agentName: string },
     ];
     const traceData = buildAgentTraceData(messages, [], traceEvents);
-    const supervisor = traceData?.nodes["span-supervisor-1"];
+    const supervisor = traceData?.nodes["agent-supervisor-1"];
 
-    expect(traceData?.roots).toEqual(["span-supervisor-1"]);
-
-    const renderItems = buildAgentRenderItems(
-      supervisor!,
-      supervisor!.childStepIds,
-      traceData!,
-    );
-
-    expect(
-      renderItems.map((item) =>
-        item.type === "message"
-          ? item.message.id
-          : item.type === "tool"
-            ? `tool:${item.toolCall.id}:${item.toolCall.function.name}`
-            : `child:${item.stepId}:${item.input ?? "no-input"}`,
-      ),
-    ).toEqual([
+    expect(supervisor?.messages.map((message) => message.id)).toEqual([
       "assistant-supervisor-1",
-      'child:span-writer-1:{"task":"draft"}',
-      "assistant-supervisor-2",
+    ]);
+    expect(traceData?.roots).toEqual([
+      "agent-supervisor-1",
+      "agent-supervisor-2",
+    ]);
+    expect(traceData?.nodes["agent-supervisor-1"]?.childStepIds).toEqual([
+      "agent-writer-1",
     ]);
   });
 
-  it("keeps canonical orphan tools at their trace position instead of appending them", () => {
+  it("keeps in-band orphan tools at their trace position instead of appending them", () => {
     const messages: ChatMessage[] = [
       assistantMessage("assistant-researcher-1", "Searching first."),
       {
@@ -809,49 +792,38 @@ describe("AgentTraceView ordering", () => {
     const traceEvents: TraceEvent[] = [
       {
         type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
+        name: "ag-ui.trace",
         value: {
-          version: 1,
+          version: 2,
           type: "span.start",
-          spanId: "span-researcher-1",
-          name: "researcher",
+          agentId: "agent-researcher-1",
+          agentName: "researcher",
           kind: "subagent",
         },
       },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-researcher-1",
-          spanId: "span-researcher-1",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-researcher-1",
+        agentId: "agent-researcher-1",
+        agentName: "researcher",
+      } as TraceEvent & { agentId: string; agentName: string },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "tool.link",
-          toolCallId: "tool-search-1",
-          toolCallName: "search_web",
-          spanId: "span-researcher-1",
-        },
-      },
+        type: "TOOL_CALL_START",
+        toolCallId: "tool-search-1",
+        toolCallName: "search_web",
+        parentMessageId: "assistant-researcher-1",
+        agentId: "agent-researcher-1",
+        agentName: "researcher",
+      } as TraceEvent & { agentId: string; agentName: string },
       {
-        type: "CUSTOM",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "message.link",
-          messageId: "assistant-researcher-2",
-          spanId: "span-researcher-1",
-        },
-      },
+        type: "TEXT_MESSAGE_START",
+        messageId: "assistant-researcher-2",
+        agentId: "agent-researcher-1",
+        agentName: "researcher",
+      } as TraceEvent & { agentId: string; agentName: string },
     ];
     const traceData = buildAgentTraceData(messages, [], traceEvents);
-    const researcher = traceData?.nodes["span-researcher-1"];
+    const researcher = traceData?.nodes["agent-researcher-1"];
 
     const renderItems = buildAgentRenderItems(
       researcher!,

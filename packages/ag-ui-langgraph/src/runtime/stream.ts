@@ -1,7 +1,7 @@
 import { EventType, type BaseEvent } from "@ag-ui/core";
 
 import type { InterruptLike, RunnableConfigLike } from "../types.js";
-import { makeJsonSafe } from "./convert.js";
+import { makeJsonSafe } from "../messages/convert.js";
 
 export const ROOT_SUBGRAPH_NAME = "root";
 

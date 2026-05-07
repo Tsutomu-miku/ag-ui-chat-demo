@@ -7,10 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   LangGraphEventTypes,
   CustomEventNames,
-  AG_UI_TRACE_EVENT_NAME,
-  AG_UI_TRACE_PROTOCOL_VERSION,
   createProtocolTracePlugin,
-} from "../src/index.js";
+} from "../../src/index.js";
 
 describe("LangGraphEventTypes", () => {
   it("has all 11 event types", () => {
@@ -42,10 +40,5 @@ describe("CustomEventNames", () => {
 describe("trace plugin exports", () => {
   it("exports createProtocolTracePlugin", () => {
     expect(createProtocolTracePlugin).toBeTypeOf("function");
-  });
-
-  it("exports canonical trace protocol constants", () => {
-    expect(AG_UI_TRACE_EVENT_NAME).toBe("ag-ui.trace");
-    expect(AG_UI_TRACE_PROTOCOL_VERSION).toBe(2);
   });
 });
