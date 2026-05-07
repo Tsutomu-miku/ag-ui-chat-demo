@@ -26,10 +26,12 @@ export interface LangGraphPlugin {
 type TraceEvent = BaseEvent &
   Partial<{
     stepName: string;
-    parentStepName: string;
-    stepId: string;
-    parentStepId: string;
-    stepKind: TraceStepKind;
+    step: {
+      id?: string;
+      parentId?: string;
+      kind?: TraceStepKind;
+      name?: string;
+    };
     toolCallId: string;
     toolCallName: string;
   }>;
@@ -125,20 +127,30 @@ export function createProtocolTracePlugin(): LangGraphPlugin {
 
         return {
           ...event,
-          stepId,
-          ...(parentStepId ? { parentStepId } : {}),
-          stepKind,
+          step: {
+            id: stepId,
+            ...(parentStepId ? { parentId: parentStepId } : {}),
+            kind: stepKind,
+            name: event.stepName,
+          },
         };
       }
 
       if (event.type === "STEP_FINISHED" && event.stepName) {
         const enriched = {
           ...event,
-          ...(currentStep?.stepId ? { stepId: currentStep.stepId } : {}),
-          ...(currentStep?.parentStepId
-            ? { parentStepId: currentStep.parentStepId }
+          ...(currentStep
+            ? {
+                step: {
+                  id: currentStep.stepId,
+                  ...(currentStep.parentStepId
+                    ? { parentId: currentStep.parentStepId }
+                    : {}),
+                  kind: currentStep.stepKind,
+                  name: currentStep.stepName,
+                },
+              }
             : {}),
-          ...(currentStep?.stepKind ? { stepKind: currentStep.stepKind } : {}),
         };
 
         if (currentStep?.stepName === event.stepName) {
@@ -156,11 +168,14 @@ export function createProtocolTracePlugin(): LangGraphPlugin {
         toolOwners.set(event.toolCallId, currentStep);
         return {
           ...event,
-          stepId: currentStep.stepId,
-          ...(currentStep.parentStepId
-            ? { parentStepId: currentStep.parentStepId }
-            : {}),
-          stepKind: currentStep.stepKind,
+          step: {
+            id: currentStep.stepId,
+            ...(currentStep.parentStepId
+              ? { parentId: currentStep.parentStepId }
+              : {}),
+            kind: currentStep.stepKind,
+            name: currentStep.stepName,
+          },
         };
       }
 
@@ -179,9 +194,12 @@ export function createProtocolTracePlugin(): LangGraphPlugin {
 
         return {
           ...event,
-          stepId: owner.stepId,
-          ...(owner.parentStepId ? { parentStepId: owner.parentStepId } : {}),
-          stepKind: owner.stepKind,
+          step: {
+            id: owner.stepId,
+            ...(owner.parentStepId ? { parentId: owner.parentStepId } : {}),
+            kind: owner.stepKind,
+            name: owner.stepName,
+          },
         };
       }
 
@@ -194,11 +212,14 @@ export function createProtocolTracePlugin(): LangGraphPlugin {
       ) {
         return {
           ...event,
-          stepId: currentStep.stepId,
-          ...(currentStep.parentStepId
-            ? { parentStepId: currentStep.parentStepId }
-            : {}),
-          stepKind: currentStep.stepKind,
+          step: {
+            id: currentStep.stepId,
+            ...(currentStep.parentStepId
+              ? { parentId: currentStep.parentStepId }
+              : {}),
+            kind: currentStep.stepKind,
+            name: currentStep.stepName,
+          },
         };
       }
 

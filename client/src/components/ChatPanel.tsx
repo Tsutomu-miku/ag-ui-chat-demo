@@ -251,9 +251,9 @@ export function ChatPanel({
               >
                 <span className="feature-emoji">🌲</span>
                 <span>
-                  Sub-agent Tree
+                  Researchers + Writer
                   <br />
-                  <small>Deterministic handoff</small>
+                  <small>Parallel research {"->"} writer</small>
                 </span>
               </div>
               <div
@@ -261,7 +261,7 @@ export function ChatPanel({
                 onClick={() =>
                   selectPrompt(
                     "agent",
-                    "Ask the researcher for the weather in Tokyo, then ask the writer for a concise travel note.",
+                    "Prepare a Tokyo travel brief by calling the weather researcher and the travel-guidance researcher in parallel. The weather researcher should gather the current weather in Tokyo. The travel-guidance researcher should gather practical activity and packing guidance for those conditions. Then ask one writer to combine both research results into a concise travel note.",
                   )
                 }
               >
@@ -269,7 +269,7 @@ export function ChatPanel({
                 <span>
                   Research + write
                   <br />
-                  <small>Supervisor handoff</small>
+                  <small>Parallel researchers</small>
                 </span>
               </div>
               <div
@@ -342,7 +342,11 @@ export function ChatPanel({
             turnActiveSteps,
             turnTraceEvents,
           );
-          const shouldShowTree = presentation.traceMode !== "none";
+          const shouldShowTree =
+            isLatestTurn && presentation.traceMode !== "none";
+          const visibleMessages = shouldShowTree
+            ? presentation.standaloneMessages
+            : turn.events;
 
           return (
             <div key={turn.id}>
@@ -360,7 +364,7 @@ export function ChatPanel({
                   mode={presentation.traceMode}
                 />
               )}
-              {presentation.standaloneMessages.map((message) => (
+              {visibleMessages.map((message) => (
                 <MessageBubble
                   key={message.id}
                   message={message}

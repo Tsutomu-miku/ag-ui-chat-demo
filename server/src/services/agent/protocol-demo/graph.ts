@@ -1,11 +1,12 @@
 import {
   BACKEND_TOOL_CALL_ID,
   FRONTEND_TOOL_CALL_ID,
+  RESEARCHER_ALPHA_OUTPUT_MESSAGE_ID,
+  RESEARCHER_BETA_OUTPUT_MESSAGE_ID,
+  RESEARCHER_HANDOFF_TOOL_CALL_ID,
   SUPERVISOR_HANDOFF_MESSAGE_ID,
   SUPERVISOR_SUMMARY_MESSAGE_ID,
   WRITER_OUTPUT_MESSAGE_ID,
-  WRITER_PROGRESS_MESSAGE_ID,
-  WRITER_CALC_TOOL_CALL_ID,
   WRITER_HANDOFF_TOOL_CALL_ID,
   chainEnd,
   hasToolResume,
@@ -99,122 +100,169 @@ export class ProtocolDemoGraph {
       userText.includes("sub-agent tree demo") ||
       userText.includes("sub agent tree demo") ||
       userText.includes("writer handoff demo");
+    const runParallelSubAgentDemo =
+      userText.includes("parallel writer demo") ||
+      userText.includes("parallel sub-agent demo") ||
+      userText.includes("parallel sub agent demo");
+    const runResearchFanoutDemo =
+      runSubAgentTreeDemo || runParallelSubAgentDemo;
 
     async function* generate(): AsyncGenerator<StreamEvent> {
-      if (runSubAgentTreeDemo) {
-        yield chainEnd("supervisor", {
-          protocolStage: "supervisor-routing",
-          artifacts: ["deterministic handoff", "step tracking", "writer subtree"],
-        });
+      if (runResearchFanoutDemo) {
+        const supervisorNs = {
+          langgraph_checkpoint_ns: "supervisor:root|agent:1",
+        };
+        const researcherFindings = [
+          {
+            namespace: { langgraph_checkpoint_ns: "researcher:alpha|agent:1" },
+            messageId: RESEARCHER_ALPHA_OUTPUT_MESSAGE_ID,
+            task: "Research enterprise workflow use cases for AG-UI agents.",
+            content:
+              "Researcher alpha found enterprise workflow examples including approval routing, support triage, and internal operations copilots.",
+          },
+          {
+            namespace: { langgraph_checkpoint_ns: "researcher:beta|agent:1" },
+            messageId: RESEARCHER_BETA_OUTPUT_MESSAGE_ID,
+            task: "Research product-facing use cases for AG-UI agents.",
+            content:
+              "Researcher beta found product-facing patterns including onboarding copilots, guided search, and personalized assistant workflows.",
+          },
+        ];
+
+        yield chainEnd(
+          "supervisor",
+          {
+            protocolStage: "research-fanout-routing",
+            artifacts: [
+              "supervisor",
+              "same-name researchers",
+              "owner-aware trace",
+            ],
+          },
+          supervisorNs,
+        );
         yield textChunk(
-          "Supervisor received the request and is handing the task to the writer sub-agent. ",
+          "Supervisor is spawning multiple researcher instances. ",
           "supervisor",
           SUPERVISOR_HANDOFF_MESSAGE_ID,
+          supervisorNs,
         );
         yield toolCallStart(
-          WRITER_HANDOFF_TOOL_CALL_ID,
-          "transfer_to_writer",
+          RESEARCHER_HANDOFF_TOOL_CALL_ID,
+          "transfer_to_researcher",
           "supervisor",
           SUPERVISOR_HANDOFF_MESSAGE_ID,
+          supervisorNs,
         );
         yield toolCallArgs(
-          WRITER_HANDOFF_TOOL_CALL_ID,
+          RESEARCHER_HANDOFF_TOOL_CALL_ID,
           {
-            task: "Calculate (23 * 45) + (67 / 3) and explain the result in one paragraph.",
+            tasks: researcherFindings.map((researcher) => researcher.task),
           },
           "supervisor",
           SUPERVISOR_HANDOFF_MESSAGE_ID,
+          supervisorNs,
         );
-        yield textEnd("supervisor", SUPERVISOR_HANDOFF_MESSAGE_ID);
-        yield toolEnd(
-          "transfer_to_writer",
-          WRITER_HANDOFF_TOOL_CALL_ID,
-          { status: "ok", message: "Successfully transferred to writer" },
+        yield textEnd(
           "supervisor",
-          {
-            task: "Calculate (23 * 45) + (67 / 3) and explain the result in one paragraph.",
-          },
           SUPERVISOR_HANDOFF_MESSAGE_ID,
+          supervisorNs,
+        );
+        yield toolEnd(
+          "transfer_to_researcher",
+          RESEARCHER_HANDOFF_TOOL_CALL_ID,
+          { status: "ok", mode: "fanout" },
+          "supervisor",
+          { tasks: researcherFindings.map((researcher) => researcher.task) },
+          SUPERVISOR_HANDOFF_MESSAGE_ID,
+          supervisorNs,
         );
 
-        yield chainEnd("writer", {
-          protocolStage: "writer-active",
-          artifacts: ["writer step", "calculator tool", "paragraph draft"],
-        });
-        yield textChunk(
-          "Writer accepted the handoff and is calculating the expression before drafting the explanation. ",
-          "writer",
-          WRITER_PROGRESS_MESSAGE_ID,
-        );
-        yield toolCallStart(
-          WRITER_CALC_TOOL_CALL_ID,
-          "calculate",
-          "writer",
-          WRITER_PROGRESS_MESSAGE_ID,
-        );
-        yield toolCallArgs(
-          WRITER_CALC_TOOL_CALL_ID,
-          { expression: "(23 * 45) + (67 / 3)" },
-          "writer",
-          WRITER_PROGRESS_MESSAGE_ID,
-        );
-        yield textEnd("writer", WRITER_PROGRESS_MESSAGE_ID);
-        const writerCalcResultMessageId = `${WRITER_CALC_TOOL_CALL_ID}-result`;
-        const writerCalcResult = JSON.stringify({
-          expression: "(23 * 45) + (67 / 3)",
-          result: 1057.3333333333333,
-        });
-        yield toolResultStart(
-          WRITER_CALC_TOOL_CALL_ID,
-          writerCalcResultMessageId,
-          "writer",
-          {
-            stepName: "writer",
-            stepKind: "subagent",
-            parentStepName: "supervisor",
-          },
-        );
-        for (const chunk of splitIntoChunks(writerCalcResult)) {
-          yield toolResultDelta(
-            WRITER_CALC_TOOL_CALL_ID,
-            writerCalcResultMessageId,
-            chunk,
-            "writer",
+        for (const [index, researcher] of researcherFindings.entries()) {
+          yield chainEnd(
+            "researcher",
+            {
+              protocolStage: `researcher-${index + 1}`,
+              artifacts: ["research output"],
+            },
+            researcher.namespace,
+          );
+          yield textChunk(
+            researcher.content,
+            "researcher",
+            researcher.messageId,
+            researcher.namespace,
+          );
+          yield textEnd(
+            "researcher",
+            researcher.messageId,
+            researcher.namespace,
           );
         }
-        yield toolResultEnd(
-          WRITER_CALC_TOOL_CALL_ID,
-          writerCalcResultMessageId,
-          "writer",
-        );
-        yield toolEnd(
-          "calculate",
-          WRITER_CALC_TOOL_CALL_ID,
-          {
-            expression: "(23 * 45) + (67 / 3)",
-            result: 1057.3333333333333,
-          },
-          "writer",
-          { expression: "(23 * 45) + (67 / 3)" },
-          WRITER_PROGRESS_MESSAGE_ID,
-        );
-        yield textChunk(
-          "When we calculate (23 x 45) + (67 / 3), the result is 1057.3333333333333. The first part, 23 multiplied by 45, gives 1035, and the second part, 67 divided by 3, gives about 22.3333. Adding those two values produces 1057.3333, so the final answer includes a repeating decimal because 67 cannot be divided by 3 into a whole number.",
-          "writer",
-          WRITER_OUTPUT_MESSAGE_ID,
-        );
-        yield textEnd("writer", WRITER_OUTPUT_MESSAGE_ID);
 
-        yield chainEnd("supervisor", {
-          protocolStage: "supervisor-wrap-up",
-          artifacts: ["writer response returned", "final summary"],
-        });
+        yield chainEnd(
+          "supervisor",
+          {
+            protocolStage: "research-fan-in",
+            artifacts: ["research merged", "writer brief prepared"],
+          },
+          supervisorNs,
+        );
         yield textChunk(
-          "Supervisor received the writer response and completed the sub-agent tree demo.",
+          "Supervisor merged the research findings and handed a concise brief to the writer. ",
           "supervisor",
           SUPERVISOR_SUMMARY_MESSAGE_ID,
+          supervisorNs,
         );
-        yield textEnd("supervisor", SUPERVISOR_SUMMARY_MESSAGE_ID);
+        yield toolCallStart(
+          WRITER_HANDOFF_TOOL_CALL_ID,
+          "transfer_to_writer",
+          "supervisor",
+          SUPERVISOR_SUMMARY_MESSAGE_ID,
+          supervisorNs,
+        );
+        yield toolCallArgs(
+          WRITER_HANDOFF_TOOL_CALL_ID,
+          {
+            brief:
+              "Combine enterprise workflow and product-facing AG-UI use cases into one concise implementation brief.",
+          },
+          "supervisor",
+          SUPERVISOR_SUMMARY_MESSAGE_ID,
+          supervisorNs,
+        );
+        yield textEnd("supervisor", SUPERVISOR_SUMMARY_MESSAGE_ID, {
+          ...supervisorNs,
+        });
+        yield toolEnd(
+          "transfer_to_writer",
+          WRITER_HANDOFF_TOOL_CALL_ID,
+          { status: "ok", mode: "single-writer" },
+          "supervisor",
+          {
+            brief:
+              "Combine enterprise workflow and product-facing AG-UI use cases into one concise implementation brief.",
+          },
+          SUPERVISOR_SUMMARY_MESSAGE_ID,
+          supervisorNs,
+        );
+        yield chainEnd(
+          "writer",
+          {
+            protocolStage: "writer-final-draft",
+            artifacts: ["implementation brief"],
+          },
+          { langgraph_checkpoint_ns: "writer:final|agent:1" },
+        );
+        yield textChunk(
+          "The writer produced a compact brief covering enterprise workflow automation, customer-facing assistants, and a phased rollout plan for AG-UI agents.",
+          "writer",
+          WRITER_OUTPUT_MESSAGE_ID,
+          { langgraph_checkpoint_ns: "writer:final|agent:1" },
+        );
+        yield textEnd("writer", WRITER_OUTPUT_MESSAGE_ID, {
+          langgraph_checkpoint_ns: "writer:final|agent:1",
+        });
         return;
       }
 
@@ -224,8 +272,12 @@ export class ProtocolDemoGraph {
           approval: "received",
           artifacts: ["Command-style resume", "tool result message"],
         });
-        yield textChunk("Approval received. Resuming the run with the tool result. ");
-        yield textChunk("The protocol path is now complete: text stream, backend tool, state snapshot, frontend tool, and resume.");
+        yield textChunk(
+          "Approval received. Resuming the run with the tool result. ",
+        );
+        yield textChunk(
+          "The protocol path is now complete: text stream, backend tool, state snapshot, frontend tool, and resume.",
+        );
         yield textEnd();
         yield chainEnd("finalizer", {
           protocolStage: "complete",
@@ -245,7 +297,9 @@ export class ProtocolDemoGraph {
         protocolStage: "input-normalized",
         artifacts: ["RunAgentInput", "schema filtering", "step tracking"],
       });
-      yield textChunk("Protocol lab started. I will emit a backend tool call, update shared state, then ask for frontend approval. ");
+      yield textChunk(
+        "Protocol lab started. I will emit a backend tool call, update shared state, then ask for frontend approval. ",
+      );
       yield textEnd();
 
       yield toolCallStart(BACKEND_TOOL_CALL_ID, "protocol_state_probe");
@@ -261,7 +315,11 @@ export class ProtocolDemoGraph {
       });
       yield toolResultStart(BACKEND_TOOL_CALL_ID, backendResultMessageId);
       for (const chunk of splitIntoChunks(backendResult)) {
-        yield toolResultDelta(BACKEND_TOOL_CALL_ID, backendResultMessageId, chunk);
+        yield toolResultDelta(
+          BACKEND_TOOL_CALL_ID,
+          backendResultMessageId,
+          chunk,
+        );
       }
       yield toolResultEnd(BACKEND_TOOL_CALL_ID, backendResultMessageId);
       yield toolEnd("protocol_state_probe", BACKEND_TOOL_CALL_ID, {

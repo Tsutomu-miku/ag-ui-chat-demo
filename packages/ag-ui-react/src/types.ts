@@ -9,7 +9,26 @@
 
 // ── Tool call within a chat message ──
 
-export interface ToolCallFunction {
+export interface ExecutionStep {
+  id?: string;
+  parentId?: string;
+  kind?: string;
+  name?: string;
+}
+
+export interface ExecutionOwner {
+  key: string;
+  type: string;
+  instanceId: string;
+  parentKey?: string;
+}
+
+export interface ExecutionContext {
+  step?: ExecutionStep;
+  owner?: ExecutionOwner;
+}
+
+export interface ToolCallFunction extends ExecutionContext {
   id: string;
   type: "function";
   function: {
@@ -18,17 +37,11 @@ export interface ToolCallFunction {
   };
   /** Whether the tool call has completed (received result) */
   complete?: boolean;
-  /** AG-UI step metadata for tree rendering */
-  stepId?: string;
-  parentStepId?: string;
-  stepKind?: string;
-  stepName?: string;
-  parentStepName?: string;
 }
 
 // ── Chat message ──
 
-export interface ChatMessage {
+export interface ChatMessage extends ExecutionContext {
   id: string;
   role: "user" | "assistant" | "tool" | "system";
   content: string;
@@ -42,12 +55,6 @@ export interface ChatMessage {
   reasoning?: string;
   /** Whether the reasoning stream is still in progress */
   isReasoningStreaming?: boolean;
-  /** AG-UI step metadata for tree rendering */
-  stepId?: string;
-  parentStepId?: string;
-  stepKind?: string;
-  stepName?: string;
-  parentStepName?: string;
   createdAt: string;
 }
 
@@ -65,15 +72,19 @@ export interface TraceEvent {
   content?: string;
   toolCallId?: string;
   toolCallName?: string;
-  stepId?: string;
-  parentStepId?: string;
-  stepKind?: string;
-  stepName?: string;
-  parentStepName?: string;
+  step?: ExecutionStep;
+  owner?: ExecutionOwner;
 }
 
 export const AG_UI_TRACE_EVENT_NAME = "ag-ui.trace";
-export const AG_UI_TRACE_PROTOCOL_VERSION = 1;
+export const AG_UI_TRACE_PROTOCOL_VERSION = 2;
+
+export type AgUiTraceOwner = {
+  key: string;
+  type: string;
+  instanceId: string;
+  parentKey?: string;
+};
 
 export type AgUiTraceEvent =
   | {
@@ -83,12 +94,14 @@ export type AgUiTraceEvent =
       name: string;
       kind: string;
       parentSpanId?: string;
+      owner?: AgUiTraceOwner;
       source?: Record<string, unknown>;
     }
   | {
       version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
       type: "span.end";
       spanId: string;
+      owner?: AgUiTraceOwner;
       source?: Record<string, unknown>;
     }
   | {
@@ -97,6 +110,7 @@ export type AgUiTraceEvent =
       messageId: string;
       spanId: string;
       role?: string;
+      owner?: AgUiTraceOwner;
       source?: Record<string, unknown>;
     }
   | {
@@ -106,6 +120,7 @@ export type AgUiTraceEvent =
       spanId: string;
       toolCallName?: string;
       parentMessageId?: string;
+      owner?: AgUiTraceOwner;
       source?: Record<string, unknown>;
     };
 
@@ -142,22 +157,15 @@ export interface PendingToolCall {
   toolCallName: string;
   args: Record<string, unknown>;
   status: "pending" | "approved" | "rejected";
-  stepId?: string;
-  parentStepId?: string;
-  stepKind?: string;
-  stepName?: string;
-  parentStepName?: string;
+  step?: ExecutionStep;
+  owner?: ExecutionOwner;
   result?: string;
 }
 
 // ── Active step tracking for sub-agent execution ──
 
-export interface ActiveStep {
-  stepId?: string;
-  parentStepId?: string;
-  stepKind?: string;
+export interface ActiveStep extends ExecutionContext {
   stepName: string;
-  parentStepName?: string;
   startedAt: string;
 }
 
@@ -174,11 +182,8 @@ export type ThreadAgentEvent =
   | {
       type: "assistant_start";
       messageId: string;
-      stepId?: string;
-      parentStepId?: string;
-      stepKind?: string;
-      stepName?: string;
-      parentStepName?: string;
+      step?: ExecutionStep;
+      owner?: ExecutionOwner;
     }
   | {
       type: "assistant_delta";
@@ -194,11 +199,8 @@ export type ThreadAgentEvent =
       parentMessageId: string;
       toolCallId: string;
       toolCallName: string;
-      stepId?: string;
-      parentStepId?: string;
-      stepKind?: string;
-      stepName?: string;
-      parentStepName?: string;
+      step?: ExecutionStep;
+      owner?: ExecutionOwner;
     }
   | {
       type: "tool_args";
@@ -213,11 +215,8 @@ export type ThreadAgentEvent =
       type: "tool_result_start";
       messageId: string;
       toolCallId: string;
-      stepId?: string;
-      parentStepId?: string;
-      stepKind?: string;
-      stepName?: string;
-      parentStepName?: string;
+      step?: ExecutionStep;
+      owner?: ExecutionOwner;
     }
   | {
       type: "tool_result_delta";
@@ -232,20 +231,14 @@ export type ThreadAgentEvent =
     }
   | {
       type: "step_started";
-      stepId?: string;
-      parentStepId?: string;
-      stepKind?: string;
-      stepName: string;
-      parentStepName?: string;
+      step: ExecutionStep & { name: string };
+      owner?: ExecutionOwner;
     }
   | {
       type: "reasoning_start";
       messageId: string;
-      stepId?: string;
-      parentStepId?: string;
-      stepKind?: string;
-      stepName?: string;
-      parentStepName?: string;
+      step?: ExecutionStep;
+      owner?: ExecutionOwner;
     }
   | {
       type: "reasoning_delta";
@@ -258,11 +251,8 @@ export type ThreadAgentEvent =
     }
   | {
       type: "step_finished";
-      stepId?: string;
-      parentStepId?: string;
-      stepKind?: string;
-      stepName: string;
-      parentStepName?: string;
+      step: ExecutionStep & { name: string };
+      owner?: ExecutionOwner;
     }
   | {
       type: "run_complete";

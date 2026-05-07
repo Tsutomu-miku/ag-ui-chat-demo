@@ -1,7 +1,7 @@
 import { EventType, type BaseEvent } from "@ag-ui/core";
 import { AG_UI_TRACE_EVENT_NAME } from "ag-ui-langgraph";
 
-import type { StoredTraceEvent } from "./store.js";
+import type { StoredOwner, StoredStep, StoredTraceEvent } from "./store.js";
 
 const TOOL_RESULT_START_EVENT = "ag-ui.tool_result_start";
 const TOOL_RESULT_DELTA_EVENT = "ag-ui.tool_result_delta";
@@ -19,11 +19,8 @@ type PersistableTraceEvent = BaseEvent &
     content: string;
     toolCallId: string;
     toolCallName: string;
-    stepId: string;
-    parentStepId: string;
-    stepKind: string;
-    stepName: string;
-    parentStepName: string;
+    step: StoredStep;
+    owner: StoredOwner;
   }>;
 
 const TRACE_EVENT_TYPES = new Set<string>([
@@ -98,10 +95,7 @@ export function toStoredTraceEvents(
       ...(event.content ? { content: event.content } : {}),
       ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
       ...(event.toolCallName ? { toolCallName: event.toolCallName } : {}),
-      ...(event.stepId ? { stepId: event.stepId } : {}),
-      ...(event.parentStepId ? { parentStepId: event.parentStepId } : {}),
-      ...(event.stepKind ? { stepKind: event.stepKind } : {}),
-      ...(event.stepName ? { stepName: event.stepName } : {}),
-      ...(event.parentStepName ? { parentStepName: event.parentStepName } : {}),
+      ...(event.step ? { step: event.step } : {}),
+      ...(event.owner ? { owner: event.owner } : {}),
     }));
 }

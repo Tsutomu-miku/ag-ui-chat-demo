@@ -47,27 +47,19 @@ export function AgentTraceView({
       messages: messages.map((message) => ({
         id: message.id,
         role: message.role,
-        stepId: message.stepId,
-        parentStepId: message.parentStepId,
-        stepKind: message.stepKind,
-        stepName: message.stepName,
-        parentStepName: message.parentStepName,
+        step: message.step,
+        owner: message.owner,
         toolCalls: (message.toolCalls ?? []).map((toolCall) => ({
           id: toolCall.id,
           name: toolCall.function.name,
-          stepId: toolCall.stepId,
-          parentStepId: toolCall.parentStepId,
-          stepKind: toolCall.stepKind,
-          stepName: toolCall.stepName,
-          parentStepName: toolCall.parentStepName,
+          step: toolCall.step,
+          owner: toolCall.owner,
         })),
       })),
       activeSteps: activeSteps.map((step) => ({
-        stepId: step.stepId,
-        parentStepId: step.parentStepId,
-        stepKind: step.stepKind,
+        step: step.step,
         stepName: step.stepName,
-        parentStepName: step.parentStepName,
+        owner: step.owner,
       })),
       traceEvents: traceEvents.map((event) => {
         if (event.type === "CUSTOM") {
@@ -83,11 +75,8 @@ export function AgentTraceView({
           messageId: event.messageId,
           parentMessageId: event.parentMessageId,
           toolCallId: event.toolCallId,
-          stepId: event.stepId,
-          parentStepId: event.parentStepId,
-          stepKind: event.stepKind,
-          stepName: event.stepName,
-          parentStepName: event.parentStepName,
+          step: event.step,
+          owner: event.owner,
         };
       }),
       traceData: traceData
@@ -114,7 +103,7 @@ export function AgentTraceView({
 
   const activeStepIds = new Set(
     activeSteps
-      .map((step) => step.stepId || step.stepName)
+      .map((step) => step.step?.id || step.stepName)
       .filter((stepId): stepId is string => Boolean(stepId)),
   );
   const renderedAgents = new Set<string>();
@@ -181,6 +170,41 @@ interface AgentRenderItemTool {
   order: number;
 }
 
+function getNodeBaseLabel(node: AgentTraceNode): string {
+  return getAgentInfo(node.owner?.type ?? node.stepName).label;
+}
+
+function getNodePresentation(
+  node: AgentTraceNode,
+  traceData: NonNullable<ReturnType<typeof buildAgentTraceData>>,
+) {
+  const nodeType = node.owner?.type ?? node.stepName;
+  const info = getAgentInfo(nodeType);
+  const siblings = Object.values(traceData.nodes)
+    .filter(
+      (candidate) =>
+        (candidate.owner?.type ?? candidate.stepName) === nodeType &&
+        candidate.parentStepId === node.parentStepId,
+    )
+    .sort((left, right) => {
+      const orderDelta =
+        getNodeRenderOrder(traceData, left.stepId) -
+        getNodeRenderOrder(traceData, right.stepId);
+      if (orderDelta !== 0) return orderDelta;
+      return left.stepId.localeCompare(right.stepId);
+    });
+  const duplicateIndex = siblings.findIndex(
+    (candidate) => candidate.stepId === node.stepId,
+  );
+  const baseLabel = getNodeBaseLabel(node);
+  const label =
+    nodeType !== "supervisor" && siblings.length > 1 && duplicateIndex >= 0
+      ? `${baseLabel} #${duplicateIndex + 1}`
+      : baseLabel;
+
+  return { info, label };
+}
+
 type AgentRenderItem =
   | AgentRenderItemMessage
   | AgentRenderItemChild
@@ -196,14 +220,14 @@ function AgentNode({
   input,
 }: AgentNodeProps) {
   const agent = traceData.nodes[stepId];
-  const info = getAgentInfo(agent.stepName);
+  const { info, label } = getNodePresentation(agent, traceData);
   const parentAgent = agent.parentStepId
     ? traceData.nodes[agent.parentStepId]
     : undefined;
   const hierarchyPath = buildAgentHierarchyPath(stepId, traceData);
   const hierarchyText = hierarchyPath.map((item) => item.label).join(" -> ");
   const relationLabel = parentAgent
-    ? `Sub-agent of ${getAgentInfo(parentAgent.stepName).label}`
+    ? `Sub-agent of ${getNodeBaseLabel(parentAgent)}`
     : "Root agent";
   const isActive = agent.active === true || activeStepIds.has(agent.stepId);
   const childStepIds = [...agent.childStepIds]
@@ -257,12 +281,12 @@ function AgentNode({
       <div className="agent-node-header">
         <span className="agent-badge">{info.badge}</span>
         <div className="agent-title">
-          <span>{info.label}</span>
+          <span>{label}</span>
           <div className="agent-title-meta">
             <small>{info.role}</small>
             {parentAgent && (
               <small className="agent-parent-name">
-                Parent: {getAgentInfo(parentAgent.stepName).label}
+                Parent: {getNodeBaseLabel(parentAgent)}
               </small>
             )}
           </div>
@@ -414,7 +438,7 @@ function buildAgentHierarchyPath(
     if (!node) break;
     path.unshift({
       stepId: node.stepId,
-      label: getAgentInfo(node.stepName).label,
+      label: getNodeBaseLabel(node),
     });
     currentStepId = node.parentStepId;
   }
@@ -653,12 +677,12 @@ export function getTraceMessageBadge(
   const ownerNode = Object.values(traceData.nodes).find((node) =>
     node.messages.some((item) => item.id === message.id),
   );
-  const stepName = message.stepName ?? ownerNode?.stepName;
+  const messageStep = message.step;
+  const stepName = messageStep?.name ?? ownerNode?.stepName;
   const content = message.content.trim();
   const isExplicitSubagentMessage = Boolean(
-    message.stepKind === "subagent" ||
-    message.parentStepId ||
-    message.parentStepName ||
+    messageStep?.kind === "subagent" ||
+    messageStep?.parentId ||
     ownerNode?.stepKind === "subagent" ||
     ownerNode?.parentStepId,
   );

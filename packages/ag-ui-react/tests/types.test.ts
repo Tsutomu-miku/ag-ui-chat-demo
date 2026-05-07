@@ -166,6 +166,7 @@ describe("types", () => {
         toolCallId: "tc1",
         toolCallName: "search",
         stepId: "step-1",
+        ownerKey: "run-1:researcher:researcher-1",
       },
       { type: "tool_args", toolCallId: "tc1", delta: '{}' },
       { type: "tool_end", toolCallId: "tc1" },
@@ -188,7 +189,22 @@ describe("types", () => {
       { type: "step_started", stepId: "step-1", stepName: "researcher" },
       { type: "step_finished", stepId: "step-1", stepName: "researcher" },
       { type: "run_complete" },
-      { type: "trace_event", name: "ag-ui.trace", value: { type: "span.start" } },
+      {
+        type: "trace_event",
+        name: "ag-ui.trace",
+        value: {
+          version: 2,
+          type: "span.start",
+          spanId: "span-1",
+          name: "researcher",
+          kind: "subagent",
+          owner: {
+            ownerKey: "run-1:researcher:researcher-1",
+            agentType: "researcher",
+            instanceId: "researcher-1",
+          },
+        },
+      },
     ];
 
     // All event types should be representable

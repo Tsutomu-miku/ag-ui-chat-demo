@@ -488,6 +488,135 @@ describe("trace model", () => {
     expect(traceData?.nodes["span-writer-1"]?.active).toBe(false);
   });
 
+  it("does not merge canonical child agents that share an instance id but have different types", () => {
+    const messages: ChatMessage[] = [
+      assistantMessage("assistant-supervisor", "Routing research"),
+      assistantMessage("assistant-weather", "Weather findings"),
+      assistantMessage("assistant-guidance", "Packing guidance"),
+    ];
+    const traceEvents: TraceEvent[] = [
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "span.start",
+          spanId: "span-supervisor-1",
+          name: "supervisor",
+          kind: "supervisor",
+          owner: {
+            key: "run-1:supervisor:supervisor:root",
+            type: "supervisor",
+            instanceId: "supervisor:root",
+          },
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "message.link",
+          messageId: "assistant-supervisor",
+          spanId: "span-supervisor-1",
+          owner: {
+            key: "run-1:supervisor:supervisor:root",
+            type: "supervisor",
+            instanceId: "supervisor:root",
+          },
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "span.start",
+          spanId: "span-weather-1",
+          name: "weather_researcher",
+          kind: "subagent",
+          parentSpanId: "span-supervisor-1",
+          owner: {
+            key: "run-1:weather_researcher:agent:shared",
+            type: "weather_researcher",
+            instanceId: "agent:shared",
+            parentKey: "run-1:supervisor:supervisor:root",
+          },
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "message.link",
+          messageId: "assistant-weather",
+          spanId: "span-weather-1",
+          owner: {
+            key: "run-1:weather_researcher:agent:shared",
+            type: "weather_researcher",
+            instanceId: "agent:shared",
+            parentKey: "run-1:supervisor:supervisor:root",
+          },
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "span.start",
+          spanId: "span-guidance-1",
+          name: "travel_guidance_researcher",
+          kind: "subagent",
+          parentSpanId: "span-supervisor-1",
+          owner: {
+            key: "run-1:travel_guidance_researcher:agent:shared",
+            type: "travel_guidance_researcher",
+            instanceId: "agent:shared",
+            parentKey: "run-1:supervisor:supervisor:root",
+          },
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "message.link",
+          messageId: "assistant-guidance",
+          spanId: "span-guidance-1",
+          owner: {
+            key: "run-1:travel_guidance_researcher:agent:shared",
+            type: "travel_guidance_researcher",
+            instanceId: "agent:shared",
+            parentKey: "run-1:supervisor:supervisor:root",
+          },
+        },
+      },
+    ];
+
+    const traceData = buildAgentTraceData(messages, [], traceEvents);
+
+    expect(traceData?.roots).toEqual(["supervisor:supervisor:root"]);
+    expect(traceData?.nodes["supervisor:supervisor:root"]?.childStepIds).toEqual(
+      [
+        "weather_researcher:agent:shared",
+        "travel_guidance_researcher:agent:shared",
+      ],
+    );
+    expect(
+      traceData?.nodes["weather_researcher:agent:shared"]?.messages.map(
+        (message) => message.id,
+      ),
+    ).toEqual(["assistant-weather"]);
+    expect(
+      traceData?.nodes["travel_guidance_researcher:agent:shared"]?.messages.map(
+        (message) => message.id,
+      ),
+    ).toEqual(["assistant-guidance"]);
+  });
+
   it("merges canonical sub-agent spans that share the same checkpoint namespace root", () => {
     const messages: ChatMessage[] = [
       assistantMessage("assistant-supervisor-1", "Route to writer"),
@@ -656,6 +785,106 @@ describe("trace model", () => {
     const traceData = buildAgentTraceData([], [], traceEvents);
 
     expect(traceData?.roots).toEqual(["span-writer-1", "span-supervisor-1"]);
+  });
+
+  it("keeps same-name canonical sub-agents separate when ownerKey differs", () => {
+    const messages: ChatMessage[] = [
+      {
+        ...assistantMessage("assistant-writer-alpha", "Alpha draft", "writer"),
+        ownerKey: "run-1:writer:writer:alpha",
+        agentType: "writer",
+        instanceId: "writer:alpha",
+      },
+      {
+        ...assistantMessage("assistant-writer-beta", "Beta draft", "writer"),
+        ownerKey: "run-1:writer:writer:beta",
+        agentType: "writer",
+        instanceId: "writer:beta",
+      },
+    ];
+    const traceEvents: TraceEvent[] = [
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "span.start",
+          spanId: "span-supervisor",
+          name: "supervisor",
+          kind: "supervisor",
+          owner: {
+            ownerKey: "run-1:supervisor:supervisor:root",
+            agentType: "supervisor",
+            instanceId: "supervisor:root",
+          },
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "span.start",
+          spanId: "span-writer-alpha",
+          name: "writer",
+          kind: "subagent",
+          parentSpanId: "span-supervisor",
+          owner: {
+            ownerKey: "run-1:writer:writer:alpha",
+            agentType: "writer",
+            instanceId: "writer:alpha",
+            parentOwnerKey: "run-1:supervisor:supervisor:root",
+          },
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "span.start",
+          spanId: "span-writer-beta",
+          name: "writer",
+          kind: "subagent",
+          parentSpanId: "span-supervisor",
+          owner: {
+            ownerKey: "run-1:writer:writer:beta",
+            agentType: "writer",
+            instanceId: "writer:beta",
+            parentOwnerKey: "run-1:supervisor:supervisor:root",
+          },
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "message.link",
+          messageId: "assistant-writer-alpha",
+          spanId: "span-writer-alpha",
+          ownerKey: "run-1:writer:writer:alpha",
+        },
+      },
+      {
+        type: "CUSTOM",
+        name: AG_UI_TRACE_EVENT_NAME,
+        value: {
+          version: 2,
+          type: "message.link",
+          messageId: "assistant-writer-beta",
+          spanId: "span-writer-beta",
+          ownerKey: "run-1:writer:writer:beta",
+        },
+      },
+    ];
+
+    const traceData = buildAgentTraceData(messages, [], traceEvents);
+
+    expect(traceData?.nodes["run-1:writer:writer:alpha"]?.messages.map((message) => message.id))
+      .toEqual(["assistant-writer-alpha"]);
+    expect(traceData?.nodes["run-1:writer:writer:beta"]?.messages.map((message) => message.id))
+      .toEqual(["assistant-writer-beta"]);
   });
 
   it("keeps only latest unlinked canonical lifecycle events for an empty live turn", () => {

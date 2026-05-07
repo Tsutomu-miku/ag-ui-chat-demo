@@ -91,7 +91,9 @@ export function createSupervisor(config: SupervisorConfig): LangGraphAgent {
     outputMode: config.outputMode ?? "full_history",
     ...(config.systemPrompt ? { prompt: config.systemPrompt } : {}),
   });
-  const graph = workflow.compile({ name: supervisorName }) as LocalCompiledGraph;
+  const graph = workflow.compile({
+    name: supervisorName,
+  }) as LocalCompiledGraph;
 
   return new LangGraphAgent({
     name: supervisorName,

@@ -1,10 +1,6 @@
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
-import {
-  searchWeb,
-  getWeather,
-  getCurrentTime,
-} from "../tools.js";
+import { searchWeb, getWeather, getCurrentTime } from "../tools.js";
 
 /**
  * Tools available to the Researcher sub-agent.
@@ -26,5 +22,18 @@ Instructions:
 - Always cite which tool/source provided each piece of information
 - Be thorough but concise
 - Prefer returning research findings to the supervisor when the research task is done
+- Assume your assigned task is one research angle inside a larger workflow. Focus only on that angle and do not broaden scope unless the task explicitly asks you to.
 - Do NOT transfer to another agent; return the research findings to the supervisor for routing
 - Return factual findings directly, not a meta-summary about what you did unless the user explicitly asks for it`;
+
+export const WEATHER_RESEARCHER_SYSTEM_PROMPT = `${RESEARCHER_SYSTEM_PROMPT}
+
+Specialization:
+- Focus on current weather, short-term forecast, temperature, precipitation, humidity, wind, and traveler-relevant weather impacts
+- Make the output practical for downstream planning and packing decisions`;
+
+export const TRAVEL_GUIDANCE_RESEARCHER_SYSTEM_PROMPT = `${RESEARCHER_SYSTEM_PROMPT}
+
+Specialization:
+- Focus on practical activity guidance, packing advice, clothing suggestions, and itinerary considerations
+- Base your recommendations on the destination context and any known weather conditions from the task`;

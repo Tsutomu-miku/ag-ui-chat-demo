@@ -109,9 +109,14 @@ import type {
 } from "./plugins/trace.js";
 import {
   createTraceCustomEvent,
+  getCheckpointNamespaceRoot,
   traceSourceFromLangGraphEvent,
   type AgUiTraceSource,
 } from "./trace.js";
+import {
+  buildTraceOwnerFromSource,
+  type TraceOwnerMetadata,
+} from "./runtime/trace-owner.js";
 
 // ── Configuration types ──
 
@@ -136,6 +141,7 @@ type ActiveTraceSpan = {
   name: string;
   kind: TraceStepKind;
   parentSpanId?: string;
+  owner: TraceOwnerMetadata;
 };
 
 // ── LangGraphAgent class (fully aligned with Python v0.0.34) ──
@@ -157,12 +163,16 @@ export class LangGraphAgent {
   /** Per-request mutable state (reset on clone) */
   protected messagesInProgress: MessagesInProgressRecord = {};
   protected activeRun: RunMetadata | null = null;
+  protected traceRunId: string | null = null;
   protected activeTraceSpan: ActiveTraceSpan | null = null;
   protected lastSupervisorSpanId: string | undefined;
+  protected lastSupervisorOwnerKey: string | undefined;
   protected traceSpanCounters = new Map<string, number>();
   protected linkedTraceMessages = new Set<string>();
   protected linkedTraceTools = new Set<string>();
   protected traceSpans = new Map<string, ActiveTraceSpan>();
+  protected traceOwners = new Map<string, TraceOwnerMetadata>();
+  protected traceOwnerSpans = new Map<string, string>();
   protected traceMessageOwners = new Map<string, string>();
   protected traceToolOwners = new Map<string, string>();
 
@@ -258,7 +268,7 @@ export class LangGraphAgent {
       typeof sourceEvent?.metadata?.langgraph_checkpoint_ns === "string"
         ? sourceEvent.metadata.langgraph_checkpoint_ns
         : undefined;
-    const namespaceRoot = checkpointNamespace?.split("|")[0]?.split(":")[0];
+    const namespaceRoot = getCheckpointNamespaceRoot(checkpointNamespace);
 
     if (
       !namespaceRoot ||
@@ -289,6 +299,10 @@ export class LangGraphAgent {
     return this.activeTraceSpan?.name;
   }
 
+  protected getActiveTraceOwner(): TraceOwnerMetadata | undefined {
+    return this.activeTraceSpan?.owner;
+  }
+
   protected classifyTraceStepKind(stepName: string): TraceStepKind {
     if (stepName === this.name || stepName === "supervisor") {
       return "supervisor";
@@ -302,7 +316,7 @@ export class LangGraphAgent {
   }
 
   protected nextTraceSpanId(stepName: string): string {
-    const runId = this.activeRun?.id ?? "run";
+    const runId = this.traceRunId ?? this.activeRun?.id ?? "run";
     const key = `${runId}:${stepName}`;
     const next = (this.traceSpanCounters.get(key) ?? 0) + 1;
     this.traceSpanCounters.set(key, next);
@@ -336,17 +350,33 @@ export class LangGraphAgent {
     const spanId = this.nextTraceSpanId(traceStepName);
     const parentSpanId =
       kind === "subagent" ? this.lastSupervisorSpanId : undefined;
+    const inheritedParentOwnerKey = parentSpanId
+      ? this.traceSpans.get(parentSpanId)?.owner.key
+      : undefined;
+    const owner = buildTraceOwnerFromSource({
+      runId: this.traceRunId ?? this.activeRun?.id,
+      stepName: traceStepName,
+      kind,
+      event: sourceEvent,
+      owner: inheritedParentOwnerKey
+        ? { parentKey: inheritedParentOwnerKey }
+        : undefined,
+    });
 
     this.activeTraceSpan = {
       spanId,
       name: traceStepName,
       kind,
       ...(parentSpanId ? { parentSpanId } : {}),
+      owner,
     };
     this.traceSpans.set(spanId, this.activeTraceSpan);
+    this.traceOwners.set(owner.key, owner);
+    this.traceOwnerSpans.set(owner.key, spanId);
 
     if (kind === "supervisor") {
       this.lastSupervisorSpanId = spanId;
+      this.lastSupervisorOwnerKey = owner.key;
     }
 
     yield* this.emitTraceEvent({
@@ -355,6 +385,12 @@ export class LangGraphAgent {
       name: traceStepName,
       kind,
       ...(parentSpanId ? { parentSpanId } : {}),
+      owner: {
+        key: owner.key,
+        type: owner.type,
+        instanceId: owner.instanceId,
+        ...(owner.parentKey ? { parentKey: owner.parentKey } : {}),
+      },
       source: this.buildTraceSource(traceStepName, sourceEvent),
     });
   }
@@ -374,6 +410,12 @@ export class LangGraphAgent {
     yield* this.emitTraceEvent({
       type: "span.end",
       spanId: span.spanId,
+      owner: {
+        key: span.owner.key,
+        type: span.owner.type,
+        instanceId: span.owner.instanceId,
+        ...(span.owner.parentKey ? { parentKey: span.owner.parentKey } : {}),
+      },
       source: this.buildTraceSource(traceStepName, sourceEvent),
     });
 
@@ -394,28 +436,54 @@ export class LangGraphAgent {
         role: string;
         toolCallId: string;
         toolCallName: string;
+        owner: {
+          key: string;
+        };
       }>;
 
-    const resolveSpan = (spanId?: string): ActiveTraceSpan | null => {
-      if (!spanId) return activeSpan;
-      return this.traceSpans.get(spanId) ?? activeSpan ?? null;
+    const resolveSpan = (opts: {
+      spanId?: string;
+      owner?: {
+        key: string;
+      };
+    }): ActiveTraceSpan | null => {
+      if (opts.owner?.key) {
+        const ownerSpanId = this.traceOwnerSpans.get(opts.owner.key);
+        if (ownerSpanId) {
+          return this.traceSpans.get(ownerSpanId) ?? activeSpan ?? null;
+        }
+      }
+      if (opts.spanId)
+        return this.traceSpans.get(opts.spanId) ?? activeSpan ?? null;
+      return activeSpan ?? null;
     };
 
     const linkMessage = function* (
       self: LangGraphAgent,
       messageId: string | undefined,
       role?: string,
-      spanId?: string,
+      opts: {
+        spanId?: string;
+        owner?: {
+          key: string;
+        };
+      } = {},
     ): Generator<BaseEvent> {
-      const span = resolveSpan(spanId);
+      const span = resolveSpan(opts);
       if (!messageId || linkedMessages.has(messageId) || !span) return;
       linkedMessages.add(messageId);
-      self.traceMessageOwners.set(messageId, span.spanId);
+      self.traceMessageOwners.set(messageId, span.owner.key);
       yield* self.emitTraceEvent({
         type: "message.link",
         messageId,
         spanId: span.spanId,
         ...(role ? { role } : {}),
+        owner: {
+          key: span.owner.key,
+          type: span.owner.type,
+          instanceId: span.owner.instanceId,
+          ...(span.owner.parentKey ? { parentKey: span.owner.parentKey } : {}),
+        },
         source: self.buildTraceSource(span.name, sourceEvent),
       });
     };
@@ -427,21 +495,27 @@ export class LangGraphAgent {
         toolCallName?: string;
         parentMessageId?: string;
         spanId?: string;
+        owner?: {
+          key: string;
+        };
       } = {},
     ): Generator<BaseEvent> {
       if (!toolCallId || linkedTools.has(toolCallId)) return;
 
-      const ownedSpanId =
-        opts.spanId ??
+      const ownedOwnerKey =
+        opts.owner?.key ??
         (opts.parentMessageId
           ? self.traceMessageOwners.get(opts.parentMessageId)
           : undefined) ??
         self.traceToolOwners.get(toolCallId);
-      const span = resolveSpan(ownedSpanId);
+      const span = resolveSpan({
+        spanId: opts.spanId,
+        owner: ownedOwnerKey ? { key: ownedOwnerKey } : undefined,
+      });
       if (!span) return;
 
       linkedTools.add(toolCallId);
-      self.traceToolOwners.set(toolCallId, span.spanId);
+      self.traceToolOwners.set(toolCallId, span.owner.key);
       yield* self.emitTraceEvent({
         type: "tool.link",
         toolCallId,
@@ -450,6 +524,12 @@ export class LangGraphAgent {
         ...(opts.parentMessageId
           ? { parentMessageId: opts.parentMessageId }
           : {}),
+        owner: {
+          key: span.owner.key,
+          type: span.owner.type,
+          instanceId: span.owner.instanceId,
+          ...(span.owner.parentKey ? { parentKey: span.owner.parentKey } : {}),
+        },
         source: self.buildTraceSource(span.name, sourceEvent),
       });
     };
@@ -463,36 +543,138 @@ export class LangGraphAgent {
         this,
         traceEvent.messageId,
         traceEvent.role ?? "assistant",
-        this.traceMessageOwners.get(traceEvent.messageId ?? ""),
+        {
+          owner:
+            traceEvent.owner ??
+            (() => {
+              const ownerKey = this.traceMessageOwners.get(
+                traceEvent.messageId ?? "",
+              );
+              return ownerKey ? { key: ownerKey } : undefined;
+            })(),
+        },
       );
     }
 
     if (event.type === EventType.TOOL_CALL_START) {
-      const ownerSpanId = traceEvent.parentMessageId
-        ? this.traceMessageOwners.get(traceEvent.parentMessageId)
-        : undefined;
-      yield* linkMessage(
-        this,
-        traceEvent.parentMessageId,
-        "assistant",
-        ownerSpanId,
-      );
+      const ownerKey =
+        traceEvent.owner?.key ??
+        (traceEvent.parentMessageId
+          ? this.traceMessageOwners.get(traceEvent.parentMessageId)
+          : undefined);
+      yield* linkMessage(this, traceEvent.parentMessageId, "assistant", {
+        owner: ownerKey ? { key: ownerKey } : undefined,
+      });
       yield* linkTool(this, traceEvent.toolCallId, {
         toolCallName: traceEvent.toolCallName,
         parentMessageId: traceEvent.parentMessageId,
-        spanId: ownerSpanId,
+        owner: ownerKey ? { key: ownerKey } : undefined,
       });
     }
 
     if (event.type === EventType.TOOL_CALL_RESULT) {
-      const ownerSpanId = traceEvent.toolCallId
-        ? this.traceToolOwners.get(traceEvent.toolCallId)
-        : undefined;
-      yield* linkMessage(this, traceEvent.messageId, "tool", ownerSpanId);
+      const ownerKey =
+        traceEvent.owner?.key ??
+        (traceEvent.toolCallId
+          ? this.traceToolOwners.get(traceEvent.toolCallId)
+          : undefined);
+      yield* linkMessage(this, traceEvent.messageId, "tool", {
+        owner: ownerKey ? { key: ownerKey } : undefined,
+      });
       yield* linkTool(this, traceEvent.toolCallId, {
-        spanId: ownerSpanId,
+        owner: ownerKey ? { key: ownerKey } : undefined,
       });
     }
+  }
+
+  protected getOwnerMetadataForEvent(
+    event: BaseEvent &
+      Partial<{
+        messageId: string;
+        parentMessageId: string;
+        toolCallId: string;
+        owner: {
+          key: string;
+        };
+      }>,
+  ): TraceOwnerMetadata | null {
+    const directOwnerKey = event.owner?.key;
+    if (directOwnerKey) {
+      return this.traceOwners.get(directOwnerKey) ?? null;
+    }
+
+    if (event.toolCallId) {
+      const ownerKey = this.traceToolOwners.get(event.toolCallId);
+      if (ownerKey) return this.traceOwners.get(ownerKey) ?? null;
+    }
+
+    if (event.parentMessageId) {
+      const ownerKey = this.traceMessageOwners.get(event.parentMessageId);
+      if (ownerKey) return this.traceOwners.get(ownerKey) ?? null;
+    }
+
+    if (event.messageId) {
+      const ownerKey = this.traceMessageOwners.get(event.messageId);
+      if (ownerKey) return this.traceOwners.get(ownerKey) ?? null;
+    }
+
+    return this.getActiveTraceOwner() ?? null;
+  }
+
+  protected attachTraceOwnerToEvent(event: BaseEvent): BaseEvent {
+    const mutable = event as BaseEvent &
+      Partial<{
+        messageId: string;
+        parentMessageId: string;
+        toolCallId: string;
+        owner: {
+          key: string;
+          type: string;
+          instanceId: string;
+          parentKey?: string;
+        };
+        emitterId: string;
+      }>;
+    const owner = this.getOwnerMetadataForEvent(mutable);
+    if (!owner) return event;
+
+    mutable.owner ??= {
+      key: owner.key,
+      type: owner.type,
+      instanceId: owner.instanceId,
+      ...(owner.parentKey ? { parentKey: owner.parentKey } : {}),
+    };
+    mutable.emitterId ??= this.activeTraceSpan?.spanId;
+    return mutable;
+  }
+
+  protected *handleTraceOwnerBoundary(
+    currentNodeName: string,
+    sourceEvent: LangGraphStreamEvent,
+  ): Generator<BaseEvent> {
+    const activeSpan = this.activeTraceSpan;
+    if (!activeSpan) return;
+
+    const nextStepName = this.resolveTraceStepName(
+      currentNodeName,
+      sourceEvent,
+    );
+    if (activeSpan.name !== nextStepName) return;
+
+    const nextOwner = buildTraceOwnerFromSource({
+      runId: this.traceRunId ?? this.activeRun?.id,
+      stepName: nextStepName,
+      kind: this.classifyTraceStepKind(nextStepName),
+      event: sourceEvent,
+      owner: activeSpan.owner.parentKey
+        ? { parentKey: activeSpan.owner.parentKey }
+        : undefined,
+    });
+
+    if (nextOwner.key === activeSpan.owner.key) return;
+
+    yield* this.finishTraceSpan(activeSpan.name, sourceEvent);
+    yield* this.startTraceSpan(currentNodeName, sourceEvent);
   }
 
   // ── Message-in-progress tracking ──
@@ -1075,12 +1257,16 @@ export class LangGraphAgent {
       manually_emitted_state: null,
       wait_for_frontend_tool: false,
     };
+    this.traceRunId = runId;
     this.activeTraceSpan = null;
     this.lastSupervisorSpanId = undefined;
+    this.lastSupervisorOwnerKey = undefined;
     this.traceSpanCounters.clear();
     this.linkedTraceMessages.clear();
     this.linkedTraceTools.clear();
     this.traceSpans.clear();
+    this.traceOwners.clear();
+    this.traceOwnerSpans.clear();
     this.traceMessageOwners.clear();
     this.traceToolOwners.clear();
 
@@ -1228,7 +1414,6 @@ export class LangGraphAgent {
         if (typeof eventRunId === "string" && eventRunId) {
           this.activeRun.id = eventRunId;
         }
-
         let exitingNode = false;
 
         if (
@@ -1259,6 +1444,8 @@ export class LangGraphAgent {
           )) {
             yield stepEvent;
           }
+        } else if (currentNodeName) {
+          yield* this.handleTraceOwnerBoundary(currentNodeName, event);
         }
 
         markPredictStateToolIfNeeded(event, this.activeRun);
@@ -1375,11 +1562,15 @@ export class LangGraphAgent {
         plugin.onRunFinish?.(this.getPluginContext());
       }
       this.activeTraceSpan = null;
+      this.traceRunId = null;
       this.lastSupervisorSpanId = undefined;
+      this.lastSupervisorOwnerKey = undefined;
       this.traceSpanCounters.clear();
       this.linkedTraceMessages.clear();
       this.linkedTraceTools.clear();
       this.traceSpans.clear();
+      this.traceOwners.clear();
+      this.traceOwnerSpans.clear();
       this.traceMessageOwners.clear();
       this.traceToolOwners.clear();
       this.activeRun = null;
@@ -1412,8 +1603,9 @@ export class LangGraphAgent {
           parentMessageId,
         ),
     })) {
-      yield agUiEvent;
-      yield* this.emitTraceLinksForEvent(agUiEvent, event);
+      const enrichedEvent = this.attachTraceOwnerToEvent(agUiEvent);
+      yield enrichedEvent;
+      yield* this.emitTraceLinksForEvent(enrichedEvent, event);
     }
   }
 }

@@ -185,11 +185,19 @@ export type PredictStateTool = {
 // ── Stream event metadata (for step hierarchy) ──
 
 export type StreamEventMetadata = Partial<{
-  stepName: string;
-  parentStepName: string;
-  stepId: string;
-  parentStepId: string;
-  stepKind: TraceStepKind;
+  step: {
+    id?: string;
+    parentId?: string;
+    kind?: TraceStepKind;
+    name?: string;
+  };
+  owner: {
+    key: string;
+    type: string;
+    instanceId: string;
+    parentKey?: string;
+  };
+  emitterId: string;
 }>;
 
 export type TraceStepKind =

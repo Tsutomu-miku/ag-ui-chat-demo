@@ -410,19 +410,23 @@ describe("updateMessagesWithAgentEvent", () => {
   // ─── step metadata ───
 
   describe("step metadata propagation", () => {
-    it("preserves stepName and parentStepName on assistant_start", () => {
+    it("preserves step context on assistant_start", () => {
       const messages = applyEvents([], [
         {
           type: "assistant_start",
           messageId: "a1",
-          stepName: "researcher",
-          parentStepName: "supervisor",
+          step: {
+            name: "researcher",
+            parentId: "supervisor",
+          },
         },
       ]);
 
       expect(messages[0]).toMatchObject({
-        stepName: "researcher",
-        parentStepName: "supervisor",
+        step: {
+          name: "researcher",
+          parentId: "supervisor",
+        },
       });
     });
 
@@ -433,19 +437,25 @@ describe("updateMessagesWithAgentEvent", () => {
           parentMessageId: "a1",
           toolCallId: "tc1",
           toolCallName: "search",
-          stepName: "researcher",
-          parentStepName: "supervisor",
+          step: {
+            name: "researcher",
+            parentId: "supervisor",
+          },
         },
       ]);
 
       expect(messages[0]).toMatchObject({
         id: "a1",
-        stepName: "researcher",
-        parentStepName: "supervisor",
+        step: {
+          name: "researcher",
+          parentId: "supervisor",
+        },
       });
       expect(messages[0].toolCalls![0]).toMatchObject({
-        stepName: "researcher",
-        parentStepName: "supervisor",
+        step: {
+          name: "researcher",
+          parentId: "supervisor",
+        },
       });
     });
 
@@ -454,15 +464,17 @@ describe("updateMessagesWithAgentEvent", () => {
         {
           type: "assistant_start",
           messageId: "a1",
-          stepName: "writer",
-          parentStepName: "supervisor",
+          step: {
+            name: "writer",
+            parentId: "supervisor",
+          },
         },
         // Second event without step metadata should not clear existing
         { type: "assistant_start", messageId: "a1" },
       ]);
 
-      expect(messages[0].stepName).toBe("writer");
-      expect(messages[0].parentStepName).toBe("supervisor");
+      expect(messages[0].step?.name).toBe("writer");
+      expect(messages[0].step?.parentId).toBe("supervisor");
     });
   });
 
@@ -478,7 +490,7 @@ describe("updateMessagesWithAgentEvent", () => {
       }];
 
       const messages = applyEvents(initial, [
-        { type: "step_started", stepName: "researcher" },
+        { type: "step_started", step: { name: "researcher" } },
       ]);
 
       expect(messages).toEqual(initial);
@@ -493,7 +505,7 @@ describe("updateMessagesWithAgentEvent", () => {
       }];
 
       const messages = applyEvents(initial, [
-        { type: "step_finished", stepName: "researcher" },
+        { type: "step_finished", step: { name: "researcher" } },
       ]);
 
       expect(messages).toEqual(initial);
@@ -615,7 +627,7 @@ describe("updateMessagesWithAgentEvent", () => {
         {
           type: "assistant_start",
           messageId: "supervisor-msg",
-          stepName: "supervisor",
+          step: { name: "supervisor" },
         },
         {
           type: "assistant_delta",
@@ -630,7 +642,7 @@ describe("updateMessagesWithAgentEvent", () => {
           parentMessageId: "supervisor-msg",
           toolCallId: "delegate-tc",
           toolCallName: "delegate_to_subagent",
-          stepName: "supervisor",
+          step: { name: "supervisor" },
         },
         {
           type: "tool_args",
@@ -643,8 +655,10 @@ describe("updateMessagesWithAgentEvent", () => {
         {
           type: "assistant_start",
           messageId: "researcher-msg",
-          stepName: "researcher",
-          parentStepName: "supervisor",
+          step: {
+            name: "researcher",
+            parentId: "supervisor",
+          },
         },
         {
           type: "assistant_delta",
@@ -673,20 +687,22 @@ describe("updateMessagesWithAgentEvent", () => {
       // Supervisor message with delegation tool call
       expect(messages[0]).toMatchObject({
         id: "supervisor-msg",
-        stepName: "supervisor",
+        step: { name: "supervisor" },
         toolCalls: [{
           id: "delegate-tc",
           function: { name: "delegate_to_subagent" },
           complete: true,
-          stepName: "supervisor",
+          step: { name: "supervisor" },
         }],
       });
 
       // Sub-agent message with parent reference
       expect(messages[1]).toMatchObject({
         id: "researcher-msg",
-        stepName: "researcher",
-        parentStepName: "supervisor",
+        step: {
+          name: "researcher",
+          parentId: "supervisor",
+        },
         content: "AI research results...",
       });
 

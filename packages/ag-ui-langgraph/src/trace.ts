@@ -3,7 +3,7 @@ import { EventType, type BaseEvent } from "@ag-ui/core";
 import type { LangGraphStreamEvent, TraceStepKind } from "./types.js";
 
 export const AG_UI_TRACE_EVENT_NAME = "ag-ui.trace";
-export const AG_UI_TRACE_PROTOCOL_VERSION = 1;
+export const AG_UI_TRACE_PROTOCOL_VERSION = 2;
 
 export type AgUiTraceSource = {
   framework: "langgraph";
@@ -13,6 +13,13 @@ export type AgUiTraceSource = {
   checkpointNamespace?: string;
 };
 
+export type AgUiTraceOwner = {
+  key: string;
+  type: string;
+  instanceId: string;
+  parentKey?: string;
+};
+
 export type AgUiTraceEvent =
   | {
       type: "span.start";
@@ -20,11 +27,13 @@ export type AgUiTraceEvent =
       name: string;
       kind: TraceStepKind;
       parentSpanId?: string;
+      owner?: AgUiTraceOwner;
       source?: AgUiTraceSource;
     }
   | {
       type: "span.end";
       spanId: string;
+      owner?: AgUiTraceOwner;
       source?: AgUiTraceSource;
     }
   | {
@@ -32,6 +41,7 @@ export type AgUiTraceEvent =
       messageId: string;
       spanId: string;
       role?: string;
+      owner?: AgUiTraceOwner;
       source?: AgUiTraceSource;
     }
   | {
@@ -40,6 +50,7 @@ export type AgUiTraceEvent =
       spanId: string;
       toolCallName?: string;
       parentMessageId?: string;
+      owner?: AgUiTraceOwner;
       source?: AgUiTraceSource;
     };
 
@@ -84,4 +95,28 @@ export function traceSourceFromLangGraphEvent(opts: {
     ...(opts.event?.event ? { event: opts.event.event } : {}),
     ...(checkpointNamespace ? { checkpointNamespace } : {}),
   };
+}
+
+export function normalizeCheckpointNamespace(
+  checkpointNamespace?: string | null,
+): string | undefined {
+  if (!checkpointNamespace) return undefined;
+  const normalized = checkpointNamespace.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function getCheckpointNamespaceRoot(
+  checkpointNamespace?: string | null,
+): string | undefined {
+  const normalized = normalizeCheckpointNamespace(checkpointNamespace);
+  return normalized?.split("|")[0]?.split(":")[0];
+}
+
+export function buildTraceOwnerKey(opts: {
+  runId?: string | null;
+  agentType: string;
+  instanceId: string;
+}): string {
+  const runId = opts.runId?.trim();
+  return [runId || "run", opts.agentType, opts.instanceId].join(":");
 }

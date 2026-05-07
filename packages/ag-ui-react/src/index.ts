@@ -9,6 +9,9 @@
 
 // ── Types ──
 export type {
+  ExecutionStep,
+  ExecutionOwner,
+  ExecutionContext,
   ToolCallFunction,
   ChatMessage,
   TraceEvent,

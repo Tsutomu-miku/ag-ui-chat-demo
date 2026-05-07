@@ -9,7 +9,7 @@ import { ProtocolDemoGraph } from "./graph.js";
 const protocolAgent = new LangGraphAgent({
   name: "protocol-demo",
   graph: new ProtocolDemoGraph() as unknown as LocalCompiledGraph,
-  subAgents: ["writer"],
+  subAgents: ["researcher", "writer"],
 });
 
 export async function* runProtocolDemoAgent(

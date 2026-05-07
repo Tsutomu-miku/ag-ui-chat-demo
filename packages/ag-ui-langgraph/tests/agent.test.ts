@@ -971,19 +971,31 @@ describe("event translation: step management", () => {
     const events = await collectEvents(agent.clone().run(makeInput()));
     const stepStarted = events.find(
       (event) => event.type === EventType.STEP_STARTED,
-    ) as (BaseEvent & { stepId?: string; stepKind?: string }) | undefined;
+    ) as
+      | (BaseEvent & {
+          step?: { id?: string; kind?: string };
+        })
+      | undefined;
     const toolStart = events.find(
       (event) => event.type === EventType.TOOL_CALL_START,
-    ) as (BaseEvent & { stepId?: string; stepKind?: string }) | undefined;
+    ) as
+      | (BaseEvent & {
+          step?: { id?: string; kind?: string };
+        })
+      | undefined;
     const toolResult = events.find(
       (event) => event.type === EventType.TOOL_CALL_RESULT,
-    ) as (BaseEvent & { stepId?: string; stepKind?: string }) | undefined;
+    ) as
+      | (BaseEvent & {
+          step?: { id?: string; kind?: string };
+        })
+      | undefined;
 
-    expect(stepStarted?.stepId).toBeTruthy();
-    expect(stepStarted?.stepKind).toBe("node");
-    expect(toolStart?.stepId).toBe(stepStarted?.stepId);
-    expect(toolResult?.stepId).toBe(stepStarted?.stepId);
-    expect(toolResult?.stepKind).toBe("node");
+    expect(stepStarted?.step?.id).toBeTruthy();
+    expect(stepStarted?.step?.kind).toBe("node");
+    expect(toolStart?.step?.id).toBe(stepStarted?.step?.id);
+    expect(toolResult?.step?.id).toBe(stepStarted?.step?.id);
+    expect(toolResult?.step?.kind).toBe("node");
   });
 
   it("emits canonical trace spans and message links without the legacy plugin", async () => {
@@ -1249,6 +1261,20 @@ describe("event translation: step management", () => {
       spanId: writerSpan?.spanId,
       role: "tool",
     });
+
+    const supervisorOwners = [
+      ...new Set(
+        trace
+          .filter(
+            (event) =>
+              event.type === "span.start" && event.name === "supervisor",
+          )
+          .map((event) => event.owner?.key)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ];
+
+    expect(supervisorOwners).toEqual(["run-1:supervisor:supervisor:root"]);
   });
 });
 

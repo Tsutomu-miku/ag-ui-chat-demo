@@ -16,12 +16,7 @@ import type { ChatMessage, ThreadAgentEvent } from "./types.js";
 function ensureAssistantMessage(
   messages: ChatMessage[],
   messageId: string,
-  metadata: Partial<
-    Pick<
-      ChatMessage,
-      "stepId" | "parentStepId" | "stepKind" | "stepName" | "parentStepName"
-    >
-  > = {},
+  metadata: Pick<ChatMessage, "step" | "owner"> = {},
 ): ChatMessage[] {
   const existing = messages.find((m) => m.id === messageId);
   if (existing) {
@@ -31,11 +26,8 @@ function ensureAssistantMessage(
             ...m,
             role: "assistant" as const,
             isStreaming: true,
-            stepId: m.stepId ?? metadata.stepId,
-            parentStepId: m.parentStepId ?? metadata.parentStepId,
-            stepKind: m.stepKind ?? metadata.stepKind,
-            stepName: m.stepName ?? metadata.stepName,
-            parentStepName: m.parentStepName ?? metadata.parentStepName,
+            step: m.step ?? metadata.step,
+            owner: m.owner ?? metadata.owner,
           }
         : m,
     );
@@ -59,12 +51,7 @@ function ensureToolResultMessage(
   messages: ChatMessage[],
   messageId: string,
   toolCallId: string,
-  metadata: Partial<
-    Pick<
-      ChatMessage,
-      "stepId" | "parentStepId" | "stepKind" | "stepName" | "parentStepName"
-    >
-  > = {},
+  metadata: Pick<ChatMessage, "step" | "owner"> = {},
 ): ChatMessage[] {
   const existing = messages.find((m) => m.id === messageId);
   if (existing) {
@@ -75,11 +62,8 @@ function ensureToolResultMessage(
             role: "tool" as const,
             toolCallId,
             isStreaming: true,
-            stepId: m.stepId ?? metadata.stepId,
-            parentStepId: m.parentStepId ?? metadata.parentStepId,
-            stepKind: m.stepKind ?? metadata.stepKind,
-            stepName: m.stepName ?? metadata.stepName,
-            parentStepName: m.parentStepName ?? metadata.parentStepName,
+            step: m.step ?? metadata.step,
+            owner: m.owner ?? metadata.owner,
           }
         : m,
     );
@@ -167,11 +151,8 @@ export function updateMessagesWithAgentEvent(
 
     case "assistant_start":
       return ensureAssistantMessage(messages, event.messageId, {
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
+        ...(event.step ? { step: event.step } : {}),
+        ...(event.owner ? { owner: event.owner } : {}),
       });
 
     case "assistant_delta":
@@ -192,11 +173,8 @@ export function updateMessagesWithAgentEvent(
 
     case "tool_start": {
       return ensureAssistantMessage(messages, event.parentMessageId, {
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
+        ...(event.step ? { step: event.step } : {}),
+        ...(event.owner ? { owner: event.owner } : {}),
       }).map((m) => {
         if (m.id !== event.parentMessageId) return m;
         // Don't add duplicate tool call
@@ -214,11 +192,8 @@ export function updateMessagesWithAgentEvent(
                 arguments: "",
               },
               complete: false,
-              stepId: event.stepId,
-              parentStepId: event.parentStepId,
-              stepKind: event.stepKind,
-              stepName: event.stepName,
-              parentStepName: event.parentStepName,
+              ...(event.step ? { step: event.step } : {}),
+              ...(event.owner ? { owner: event.owner } : {}),
             },
           ],
         };
@@ -262,13 +237,15 @@ export function updateMessagesWithAgentEvent(
       });
 
     case "tool_result_start":
-      return ensureToolResultMessage(messages, event.messageId, event.toolCallId, {
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
-      });
+      return ensureToolResultMessage(
+        messages,
+        event.messageId,
+        event.toolCallId,
+        {
+          ...(event.step ? { step: event.step } : {}),
+          ...(event.owner ? { owner: event.owner } : {}),
+        },
+      );
 
     case "tool_result_delta":
       return ensureToolResultMessage(
@@ -299,11 +276,8 @@ export function updateMessagesWithAgentEvent(
 
     case "reasoning_start":
       return ensureAssistantMessage(messages, event.messageId, {
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
+        ...(event.step ? { step: event.step } : {}),
+        ...(event.owner ? { owner: event.owner } : {}),
       }).map((m) =>
         m.id === event.messageId
           ? {
@@ -327,9 +301,7 @@ export function updateMessagesWithAgentEvent(
 
     case "reasoning_end":
       return messages.map((m) =>
-        m.id === event.messageId
-          ? { ...m, isReasoningStreaming: false }
-          : m,
+        m.id === event.messageId ? { ...m, isReasoningStreaming: false } : m,
       );
 
     case "run_complete":

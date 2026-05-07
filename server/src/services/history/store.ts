@@ -2,15 +2,26 @@ import type { ToolCall } from "@ag-ui/core";
 
 import { createLogger } from "../../config/logger.js";
 
+export interface StoredStep {
+  id?: string;
+  parentId?: string;
+  kind?: string;
+  name?: string;
+}
+
+export interface StoredOwner {
+  key: string;
+  type: string;
+  instanceId: string;
+  parentKey?: string;
+}
+
 export type StoredRole = "user" | "assistant" | "tool";
 
 export type StoredToolCall = ToolCall &
   Partial<{
-    stepId: string;
-    parentStepId: string;
-    stepKind: string;
-    stepName: string;
-    parentStepName: string;
+    step: StoredStep;
+    owner: StoredOwner;
   }>;
 
 export interface StoredMessage {
@@ -19,11 +30,8 @@ export interface StoredMessage {
   content: string;
   toolCallId?: string;
   toolCalls?: StoredToolCall[];
-  stepId?: string;
-  parentStepId?: string;
-  stepKind?: string;
-  stepName?: string;
-  parentStepName?: string;
+  step?: StoredStep;
+  owner?: StoredOwner;
   createdAt: string;
 }
 
@@ -41,11 +49,8 @@ export interface StoredTraceEvent {
   content?: string;
   toolCallId?: string;
   toolCallName?: string;
-  stepId?: string;
-  parentStepId?: string;
-  stepKind?: string;
-  stepName?: string;
-  parentStepName?: string;
+  step?: StoredStep;
+  owner?: StoredOwner;
 }
 
 export interface ChatThread {

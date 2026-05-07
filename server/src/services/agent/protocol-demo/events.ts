@@ -1,14 +1,24 @@
 import { ToolMessage } from "@langchain/core/messages";
 
 export const TEXT_MESSAGE_ID = "protocol-demo-message";
-export const SUPERVISOR_HANDOFF_MESSAGE_ID = "protocol-supervisor-handoff-message";
+export const SUPERVISOR_HANDOFF_MESSAGE_ID =
+  "protocol-supervisor-handoff-message";
 export const WRITER_PROGRESS_MESSAGE_ID = "protocol-writer-progress-message";
 export const WRITER_OUTPUT_MESSAGE_ID = "protocol-writer-output-message";
-export const SUPERVISOR_SUMMARY_MESSAGE_ID = "protocol-supervisor-summary-message";
+export const SUPERVISOR_SUMMARY_MESSAGE_ID =
+  "protocol-supervisor-summary-message";
 export const BACKEND_TOOL_CALL_ID = "protocol-backend-tool";
 export const FRONTEND_TOOL_CALL_ID = "protocol-approval-tool";
+export const RESEARCHER_HANDOFF_TOOL_CALL_ID =
+  "protocol-transfer-researcher-tool";
 export const WRITER_HANDOFF_TOOL_CALL_ID = "protocol-transfer-writer-tool";
 export const WRITER_CALC_TOOL_CALL_ID = "protocol-writer-calc-tool";
+export const RESEARCHER_ALPHA_OUTPUT_MESSAGE_ID =
+  "protocol-researcher-alpha-output";
+export const RESEARCHER_BETA_OUTPUT_MESSAGE_ID =
+  "protocol-researcher-beta-output";
+export const WRITER_ALPHA_CALC_TOOL_CALL_ID = "protocol-writer-alpha-calc-tool";
+export const WRITER_BETA_CALC_TOOL_CALL_ID = "protocol-writer-beta-calc-tool";
 export const TOOL_RESULT_START_EVENT = "ag-ui.tool_result_start";
 export const TOOL_RESULT_DELTA_EVENT = "ag-ui.tool_result_delta";
 export const TOOL_RESULT_END_EVENT = "ag-ui.tool_result_end";
@@ -23,6 +33,18 @@ export type StreamEvent = {
 
 const RUN_ID = "protocol-demo-run";
 const MODEL_NAME = "ProtocolDemoModel";
+
+type EventMetadata = Record<string, unknown>;
+
+function withNodeMetadata(
+  node: string,
+  metadata: EventMetadata = {},
+): EventMetadata {
+  return {
+    langgraph_node: node,
+    ...metadata,
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -51,6 +73,7 @@ export function textChunk(
   content: string,
   node = "assistant",
   messageId = TEXT_MESSAGE_ID,
+  metadata: EventMetadata = {},
 ): StreamEvent {
   return {
     event: "on_chat_model_stream",
@@ -62,7 +85,7 @@ export function textChunk(
         tool_call_chunks: [],
       },
     },
-    metadata: { langgraph_node: node },
+    metadata: withNodeMetadata(node, metadata),
     run_id: RUN_ID,
   };
 }
@@ -70,12 +93,13 @@ export function textChunk(
 export function textEnd(
   node = "assistant",
   messageId = TEXT_MESSAGE_ID,
+  metadata: EventMetadata = {},
 ): StreamEvent {
   return {
     event: "on_chat_model_end",
     name: MODEL_NAME,
     data: { output: { id: messageId, content: "" } },
-    metadata: { langgraph_node: node },
+    metadata: withNodeMetadata(node, metadata),
     run_id: RUN_ID,
   };
 }
@@ -85,6 +109,7 @@ export function toolCallStart(
   name: string,
   node = "assistant",
   messageId = TEXT_MESSAGE_ID,
+  metadata: EventMetadata = {},
 ): StreamEvent {
   return {
     event: "on_chat_model_stream",
@@ -96,7 +121,7 @@ export function toolCallStart(
         tool_call_chunks: [{ id: toolCallId, index: 0, name, args: "" }],
       },
     },
-    metadata: { langgraph_node: node },
+    metadata: withNodeMetadata(node, metadata),
     run_id: RUN_ID,
   };
 }
@@ -106,6 +131,7 @@ export function toolCallArgs(
   args: Record<string, unknown>,
   node = "assistant",
   messageId = TEXT_MESSAGE_ID,
+  metadata: EventMetadata = {},
 ): StreamEvent {
   return {
     event: "on_chat_model_stream",
@@ -119,7 +145,7 @@ export function toolCallArgs(
         ],
       },
     },
-    metadata: { langgraph_node: node },
+    metadata: withNodeMetadata(node, metadata),
     run_id: RUN_ID,
   };
 }
@@ -131,6 +157,7 @@ export function toolEnd(
   node = "backend_tool",
   input: Record<string, unknown> = { inspect: ["state", "messages", "tools"] },
   parentMessageId = `${toolCallId}-result`,
+  metadata: EventMetadata = {},
 ): StreamEvent {
   return {
     event: "on_tool_end",
@@ -144,7 +171,7 @@ export function toolEnd(
         content: JSON.stringify(content),
       }),
     },
-    metadata: { langgraph_node: node },
+    metadata: withNodeMetadata(node, metadata),
     run_id: RUN_ID,
   };
 }
@@ -154,6 +181,7 @@ export function toolResultStart(
   messageId: string,
   node = "backend_tool",
   metadata: Record<string, unknown> = {},
+  eventMetadata: EventMetadata = {},
 ): StreamEvent {
   return {
     event: "on_custom_event",
@@ -163,7 +191,7 @@ export function toolResultStart(
       messageId,
       ...metadata,
     },
-    metadata: { langgraph_node: node },
+    metadata: withNodeMetadata(node, eventMetadata),
     run_id: RUN_ID,
   };
 }
@@ -173,6 +201,7 @@ export function toolResultDelta(
   messageId: string,
   delta: string,
   node = "backend_tool",
+  metadata: EventMetadata = {},
 ): StreamEvent {
   return {
     event: "on_custom_event",
@@ -182,7 +211,7 @@ export function toolResultDelta(
       messageId,
       delta,
     },
-    metadata: { langgraph_node: node },
+    metadata: withNodeMetadata(node, metadata),
     run_id: RUN_ID,
   };
 }
@@ -191,6 +220,7 @@ export function toolResultEnd(
   toolCallId: string,
   messageId: string,
   node = "backend_tool",
+  metadata: EventMetadata = {},
 ): StreamEvent {
   return {
     event: "on_custom_event",
@@ -199,7 +229,7 @@ export function toolResultEnd(
       toolCallId,
       messageId,
     },
-    metadata: { langgraph_node: node },
+    metadata: withNodeMetadata(node, metadata),
     run_id: RUN_ID,
   };
 }
@@ -207,12 +237,13 @@ export function toolResultEnd(
 export function chainEnd(
   node: string,
   output: Record<string, unknown>,
+  metadata: EventMetadata = {},
 ): StreamEvent {
   return {
     event: "on_chain_end",
     name: node,
     data: { output },
-    metadata: { langgraph_node: node },
+    metadata: withNodeMetadata(node, metadata),
     run_id: RUN_ID,
   };
 }

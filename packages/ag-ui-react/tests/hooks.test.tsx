@@ -118,11 +118,12 @@ describe("useAgentChat", () => {
         subscriber.onTextMessageStartEvent({
           event: {
             messageId: "assistant-1",
-            stepId: "step-researcher-1",
-            parentStepId: "step-supervisor-1",
-            stepKind: "subagent",
-            stepName: "researcher",
-            parentStepName: "supervisor",
+            step: {
+              id: "step-researcher-1",
+              parentId: "step-supervisor-1",
+              kind: "subagent",
+              name: "researcher",
+            },
           },
         });
         subscriber.onCustomEvent({
@@ -146,17 +147,22 @@ describe("useAgentChat", () => {
             parentMessageId: "assistant-1",
             toolCallId: "tool-1",
             toolCallName: "confirm_action",
-            stepId: "step-researcher-1",
-            parentStepId: "step-supervisor-1",
-            stepKind: "subagent",
-            stepName: "researcher",
+            step: {
+              id: "step-researcher-1",
+              parentId: "step-supervisor-1",
+              kind: "subagent",
+              name: "researcher",
+            },
           },
         });
         subscriber.onToolCallArgsEvent({
           event: { toolCallId: "tool-1", delta: '{"action":"deploy"}' },
         });
         subscriber.onToolCallEndEvent({
-          event: { toolCallId: "tool-1", stepName: "researcher" },
+          event: {
+            toolCallId: "tool-1",
+            step: { name: "researcher" },
+          },
           toolCallName: "confirm_action",
           toolCallArgs: { action: "deploy" },
         });
@@ -167,10 +173,12 @@ describe("useAgentChat", () => {
             value: {
               messageId: "tool-message-1",
               toolCallId: "tool-1",
-              stepId: "step-researcher-1",
-              parentStepId: "step-supervisor-1",
-              stepKind: "subagent",
-              stepName: "researcher",
+              step: {
+                id: "step-researcher-1",
+                parentId: "step-supervisor-1",
+                kind: "subagent",
+                name: "researcher",
+              },
             },
           },
         });
@@ -200,10 +208,12 @@ describe("useAgentChat", () => {
             messageId: "tool-message-1",
             toolCallId: "tool-1",
             content: '{"approved":true}',
-            stepId: "step-researcher-1",
-            parentStepId: "step-supervisor-1",
-            stepKind: "subagent",
-            stepName: "researcher",
+            step: {
+              id: "step-researcher-1",
+              parentId: "step-supervisor-1",
+              kind: "subagent",
+              name: "researcher",
+            },
           },
         });
         await subscriber.onRunFinalized();
@@ -243,11 +253,12 @@ describe("useAgentChat", () => {
         {
           type: "assistant_start",
           messageId: "assistant-1",
-          stepId: "step-researcher-1",
-          parentStepId: "step-supervisor-1",
-          stepKind: "subagent",
-          stepName: "researcher",
-          parentStepName: "supervisor",
+          step: {
+            id: "step-researcher-1",
+            parentId: "step-supervisor-1",
+            kind: "subagent",
+            name: "researcher",
+          },
         } satisfies ThreadAgentEvent,
       ],
       [
@@ -279,10 +290,12 @@ describe("useAgentChat", () => {
           parentMessageId: "assistant-1",
           toolCallId: "tool-1",
           toolCallName: "confirm_action",
-          stepId: "step-researcher-1",
-          parentStepId: "step-supervisor-1",
-          stepKind: "subagent",
-          stepName: "researcher",
+          step: {
+            id: "step-researcher-1",
+            parentId: "step-supervisor-1",
+            kind: "subagent",
+            name: "researcher",
+          },
         } satisfies ThreadAgentEvent,
       ],
       [
@@ -306,10 +319,12 @@ describe("useAgentChat", () => {
           type: "tool_result_start",
           messageId: "tool-message-1",
           toolCallId: "tool-1",
-          stepId: "step-researcher-1",
-          parentStepId: "step-supervisor-1",
-          stepKind: "subagent",
-          stepName: "researcher",
+          step: {
+            id: "step-researcher-1",
+            parentId: "step-supervisor-1",
+            kind: "subagent",
+            name: "researcher",
+          },
         } satisfies ThreadAgentEvent,
       ],
       [
@@ -338,10 +353,12 @@ describe("useAgentChat", () => {
             role: "tool",
             content: '{"approved":true}',
             toolCallId: "tool-1",
-            stepId: "step-researcher-1",
-            parentStepId: "step-supervisor-1",
-            stepKind: "subagent",
-            stepName: "researcher",
+            step: {
+              id: "step-researcher-1",
+              parentId: "step-supervisor-1",
+              kind: "subagent",
+              name: "researcher",
+            },
           }),
         },
       ],
@@ -359,10 +376,9 @@ describe("useAgentChat", () => {
         toolCallName: "confirm_action",
         args: { action: "deploy" },
         status: "pending",
-        stepId: "step-researcher-1",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
-        stepName: "researcher",
+        step: {
+          name: "researcher",
+        },
       },
     ]);
     expect(hook.result.current.isStreaming).toBe(false);
@@ -381,17 +397,21 @@ describe("useAgentChat", () => {
             event: {
               toolCallId: "tool-2",
               toolCallName: "confirm_action",
-              stepId: "span-supervisor-1",
-              stepKind: "supervisor",
-              stepName: "supervisor",
+              step: {
+                id: "span-supervisor-1",
+                kind: "supervisor",
+                name: "supervisor",
+              },
             },
           });
           subscriber.onToolCallEndEvent({
             event: {
               toolCallId: "tool-2",
-              stepId: "span-supervisor-1",
-              stepKind: "supervisor",
-              stepName: "supervisor",
+              step: {
+                id: "span-supervisor-1",
+                kind: "supervisor",
+                name: "supervisor",
+              },
             },
             toolCallName: "confirm_action",
             toolCallArgs: { action: "ship" },
@@ -453,9 +473,11 @@ describe("useAgentChat", () => {
         role: "tool",
         content: '{"approved":true}',
         toolCallId: "tool-2",
-        stepId: "span-supervisor-1",
-        stepKind: "supervisor",
-        stepName: "supervisor",
+        step: {
+          id: "span-supervisor-1",
+          kind: "supervisor",
+          name: "supervisor",
+        },
       },
     ]);
     expect(hook.result.current.pendingToolCalls).toEqual([]);

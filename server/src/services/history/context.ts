@@ -20,13 +20,8 @@ function storedMessageToMessage(message: StoredMessage): Message | null {
         role: "assistant",
         content: message.content,
         toolCalls: message.toolCalls,
-        ...(message.stepId ? { stepId: message.stepId } : {}),
-        ...(message.parentStepId ? { parentStepId: message.parentStepId } : {}),
-        ...(message.stepKind ? { stepKind: message.stepKind } : {}),
-        ...(message.stepName ? { stepName: message.stepName } : {}),
-        ...(message.parentStepName
-          ? { parentStepName: message.parentStepName }
-          : {}),
+        ...(message.step ? { step: message.step } : {}),
+        ...(message.owner ? { owner: message.owner } : {}),
       };
     case "tool":
       if (!message.toolCallId) return null;
@@ -36,13 +31,8 @@ function storedMessageToMessage(message: StoredMessage): Message | null {
         role: "tool",
         content: message.content,
         toolCallId: message.toolCallId,
-        ...(message.stepId ? { stepId: message.stepId } : {}),
-        ...(message.parentStepId ? { parentStepId: message.parentStepId } : {}),
-        ...(message.stepKind ? { stepKind: message.stepKind } : {}),
-        ...(message.stepName ? { stepName: message.stepName } : {}),
-        ...(message.parentStepName
-          ? { parentStepName: message.parentStepName }
-          : {}),
+        ...(message.step ? { step: message.step } : {}),
+        ...(message.owner ? { owner: message.owner } : {}),
       };
   }
 }

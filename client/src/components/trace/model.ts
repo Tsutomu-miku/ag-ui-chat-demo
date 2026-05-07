@@ -2,6 +2,7 @@ import type {
   ActiveStep,
   AgUiTraceEvent,
   ChatMessage,
+  ExecutionOwner,
   ToolCallFunction,
   TraceEvent,
 } from "ag-ui-react";
@@ -20,6 +21,7 @@ export interface AgentTraceNode {
   stepKind?: string;
   parentStepId?: string;
   parentStepName?: string;
+  owner?: ExecutionOwner;
   active?: boolean;
   order?: number;
   messageOrders: Record<string, number>;
@@ -61,6 +63,16 @@ export const AGENT_LABELS: Record<
 > = {
   supervisor: { label: "Supervisor", badge: "SV", role: "Coordinator" },
   researcher: { label: "Researcher", badge: "RS", role: "Sub-agent" },
+  weather_researcher: {
+    label: "Researcher",
+    badge: "RS",
+    role: "Weather specialist",
+  },
+  travel_guidance_researcher: {
+    label: "Researcher",
+    badge: "RS",
+    role: "Travel guidance",
+  },
   writer: { label: "Writer", badge: "WR", role: "Sub-agent" },
 };
 
@@ -75,6 +87,11 @@ export const TOOL_LABELS: Record<string, { label: string; type: string }> = {
   collect_user_input: { label: "User Input", type: "frontend" },
   delegate_to_subagent: { label: "Delegate", type: "delegation" },
   transfer_to_researcher: { label: "Handoff", type: "delegation" },
+  transfer_to_weather_researcher: { label: "Handoff", type: "delegation" },
+  transfer_to_travel_guidance_researcher: {
+    label: "Handoff",
+    type: "delegation",
+  },
   transfer_to_writer: { label: "Handoff", type: "delegation" },
   forward_message: { label: "Forward Message", type: "delegation" },
 };
@@ -136,6 +153,57 @@ function getCheckpointNamespaceRoot(
       ? source.checkpointNamespace
       : undefined;
   return checkpointNamespace?.split("|")[0];
+}
+
+function getTraceOwner(traceValue: AgUiTraceEvent) {
+  if (!("owner" in traceValue) || !isRecord(traceValue.owner)) {
+    return undefined;
+  }
+  const owner = traceValue.owner;
+  if (
+    typeof owner.key !== "string" ||
+    typeof owner.type !== "string" ||
+    typeof owner.instanceId !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    key: owner.key,
+    type: owner.type,
+    instanceId: owner.instanceId,
+    ...(typeof owner.parentKey === "string"
+      ? { parentKey: owner.parentKey }
+      : {}),
+  } satisfies ExecutionOwner;
+}
+
+function getLogicalOwnerNodeId(owner?: ExecutionOwner): string | undefined {
+  if (owner?.type && owner.instanceId) {
+    return `${owner.type}:${owner.instanceId}`;
+  }
+  return owner?.instanceId || owner?.key;
+}
+
+function getLogicalOwnerNodeIdFromKey(ownerKey?: string): string | undefined {
+  if (!ownerKey) return undefined;
+  const segments = ownerKey.split(":");
+  return segments.length >= 3 ? segments.slice(1).join(":") : ownerKey;
+}
+
+function getLogicalTraceOwnerId(
+  traceValue: AgUiTraceEvent,
+): string | undefined {
+  const owner = getTraceOwner(traceValue);
+  return getLogicalOwnerNodeId(owner);
+}
+
+function getLogicalTraceParentOwnerId(
+  traceValue: AgUiTraceEvent,
+): string | undefined {
+  const owner = getTraceOwner(traceValue);
+  return owner?.parentKey
+    ? getLogicalOwnerNodeIdFromKey(owner.parentKey)
+    : undefined;
 }
 
 function hasCanonicalTrace(traceEvents: TraceEvent[]) {
@@ -251,11 +319,22 @@ export function getDelegationInput(
   if (!args || args.trim() === "{}") return undefined;
 
   const parsedArgs = parseToolArgs(args);
-  if (typeof parsedArgs.input === "string" && parsedArgs.input.trim()) {
-    return parsedArgs.input;
+  const rawInput =
+    typeof parsedArgs.input === "string" ? parsedArgs.input.trim() : undefined;
+  if (rawInput) {
+    if (rawInput === "{}") return undefined;
+    const nestedArgs = parseToolArgs(rawInput);
+    const nestedInput =
+      typeof nestedArgs.input === "string"
+        ? nestedArgs.input.trim()
+        : undefined;
+    if (nestedInput && nestedInput !== "{}") {
+      return nestedInput;
+    }
+    return rawInput;
   }
 
-  return args;
+  return args.trim() === '{"input":"{}"}' ? undefined : args;
 }
 
 export function getToolInputDisplay(
@@ -302,31 +381,30 @@ export function getTraceMode(
     toolCalls.length > 0 || messages.some((message) => message.role === "tool");
   const hasStructuredAgentTrace =
     hasCanonicalTrace(traceEvents) ||
-    traceEvents.some((event) =>
+    traceEvents.some((event) => {
+      const step = event.step;
+      return hasStructuredAgentIdentity({
+        stepId: step?.id,
+        parentStepId: step?.parentId,
+        stepKind: step?.kind,
+        stepName: step?.name,
+      });
+    }) ||
+    messages.some((message) => {
+      const step = message.step;
+      return hasStructuredAgentIdentity({
+        stepId: step?.id,
+        parentStepId: step?.parentId,
+        stepKind: step?.kind,
+        stepName: step?.name,
+      });
+    }) ||
+    activeSteps.some((activeStep) =>
       hasStructuredAgentIdentity({
-        stepId: event.stepId,
-        parentStepId: event.parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
-      }),
-    ) ||
-    messages.some((message) =>
-      hasStructuredAgentIdentity({
-        stepId: message.stepId,
-        parentStepId: message.parentStepId,
-        stepKind: message.stepKind,
-        stepName: message.stepName,
-        parentStepName: message.parentStepName,
-      }),
-    ) ||
-    activeSteps.some((step) =>
-      hasStructuredAgentIdentity({
-        stepId: step.stepId,
-        parentStepId: step.parentStepId,
-        stepKind: step.stepKind,
-        stepName: step.stepName,
-        parentStepName: step.parentStepName,
+        stepId: activeStep.step?.id,
+        parentStepId: activeStep.step?.parentId,
+        stepKind: activeStep.step?.kind,
+        stepName: activeStep.stepName,
       }),
     );
 
@@ -359,15 +437,11 @@ export function getMessageSourceLabel(
   message: ChatMessage,
 ): string | undefined {
   if (message.role !== "assistant") return undefined;
-  const stepName = normalizeStepName(message.stepName);
+  const stepName = normalizeStepName(message.step?.name);
   if (
     !stepName ||
     stepName === "supervisor" ||
-    !(
-      message.stepKind === "subagent" ||
-      message.parentStepId ||
-      message.parentStepName
-    )
+    !(message.step?.kind === "subagent" || message.step?.parentId)
   ) {
     return undefined;
   }
@@ -419,6 +493,7 @@ function ensureTraceNode(
   parentStepId?: string,
   parentStepName?: string,
   order?: number,
+  owner?: ExecutionOwner,
 ) {
   const existing = nodes[stepId];
   if (existing) {
@@ -434,6 +509,7 @@ function ensureTraceNode(
     ) {
       existing.order = order;
     }
+    existing.owner ||= owner;
     return existing;
   }
 
@@ -443,6 +519,7 @@ function ensureTraceNode(
     ...(stepKind ? { stepKind } : {}),
     ...(parentStepId ? { parentStepId } : {}),
     ...(parentStepName ? { parentStepName } : {}),
+    ...(owner ? { owner } : {}),
     ...(order !== undefined ? { order } : {}),
     messageOrders: {},
     toolOrders: {},
@@ -509,13 +586,16 @@ function collectStepIdsFromMessages(messages: ChatMessage[]) {
   const stepIds = new Set<string>();
 
   for (const message of messages) {
-    const stepId = normalizeStepId(message.stepId, message.stepName);
+    const stepId = normalizeStepId(message.step?.id, message.step?.name);
     if (stepId) stepIds.add(stepId);
-    if (message.parentStepId) stepIds.add(message.parentStepId);
+    if (message.step?.parentId) stepIds.add(message.step.parentId);
     for (const toolCall of message.toolCalls ?? []) {
-      const toolStepId = normalizeStepId(toolCall.stepId, toolCall.stepName);
+      const toolStepId = normalizeStepId(
+        toolCall.step?.id,
+        toolCall.step?.name,
+      );
       if (toolStepId) stepIds.add(toolStepId);
-      if (toolCall.parentStepId) stepIds.add(toolCall.parentStepId);
+      if (toolCall.step?.parentId) stepIds.add(toolCall.step.parentId);
     }
   }
 
@@ -582,8 +662,8 @@ export function filterTraceEventsForTurn(
       (event.toolCallId && toolCallIds.has(event.toolCallId))
     ) {
       selected.add(index);
-      if (event.stepId) stepIds.add(event.stepId);
-      if (event.parentStepId) stepIds.add(event.parentStepId);
+      if (event.step?.id) stepIds.add(event.step.id);
+      if (event.step?.parentId) stepIds.add(event.step.parentId);
     }
   }
 
@@ -616,12 +696,12 @@ export function filterTraceEventsForTurn(
       }
 
       if (
-        (event.stepId && stepIds.has(event.stepId)) ||
-        (event.parentStepId && stepIds.has(event.parentStepId))
+        (event.step?.id && stepIds.has(event.step.id)) ||
+        (event.step?.parentId && stepIds.has(event.step.parentId))
       ) {
         selected.add(index);
-        if (event.stepId) stepIds.add(event.stepId);
-        if (event.parentStepId) stepIds.add(event.parentStepId);
+        if (event.step?.id) stepIds.add(event.step.id);
+        if (event.step?.parentId) stepIds.add(event.step.parentId);
         changed = true;
       }
     }
@@ -643,19 +723,16 @@ function buildStructuredAgentTraceData(
   const nodes: Record<string, AgentTraceNode> = {};
 
   for (const [eventIndex, event] of traceEvents.entries()) {
-    const stepId = normalizeStepId(event.stepId, event.stepName);
-    const parentStepId = normalizeStepId(
-      event.parentStepId,
-      event.parentStepName,
-    );
+    const step = event.step;
+    const stepId = normalizeStepId(step?.id, step?.name);
+    const parentStepId = normalizeStepId(step?.parentId);
     if (
       !stepId ||
       !isAgentStep({
         stepId,
         parentStepId,
-        stepKind: event.stepKind,
-        stepName: event.stepName,
-        parentStepName: event.parentStepName,
+        stepKind: step?.kind,
+        stepName: step?.name,
       })
     ) {
       continue;
@@ -664,10 +741,10 @@ function buildStructuredAgentTraceData(
     ensureTraceNode(
       nodes,
       stepId,
-      event.stepName ?? stepId,
-      event.stepKind,
+      step?.name ?? stepId,
+      step?.kind,
       parentStepId,
-      event.parentStepName,
+      parentStepId ? nodes[parentStepId]?.stepName : undefined,
       eventIndex,
     );
 
@@ -675,8 +752,8 @@ function buildStructuredAgentTraceData(
       ensureTraceNode(
         nodes,
         parentStepId,
-        event.parentStepName ?? parentStepId,
-        event.parentStepId ? undefined : "supervisor",
+        parentStepId,
+        step?.parentId ? undefined : "supervisor",
         undefined,
         undefined,
         eventIndex,
@@ -687,19 +764,16 @@ function buildStructuredAgentTraceData(
 
   const activeStepOrderOffset = traceEvents.length;
   for (const [stepIndex, step] of activeSteps.entries()) {
-    const stepId = normalizeStepId(step.stepId, step.stepName);
-    const parentStepId = normalizeStepId(
-      step.parentStepId,
-      step.parentStepName,
-    );
+    const stepRef = step.step;
+    const stepId = normalizeStepId(stepRef?.id, step.stepName);
+    const parentStepId = normalizeStepId(stepRef?.parentId);
     if (
       !stepId ||
       !isAgentStep({
         stepId,
         parentStepId,
-        stepKind: step.stepKind,
+        stepKind: stepRef?.kind,
         stepName: step.stepName,
-        parentStepName: step.parentStepName,
       })
     ) {
       continue;
@@ -709,16 +783,16 @@ function buildStructuredAgentTraceData(
       nodes,
       stepId,
       step.stepName,
-      step.stepKind,
+      stepRef?.kind,
       parentStepId,
-      step.parentStepName,
+      parentStepId ? nodes[parentStepId]?.stepName : undefined,
       activeStepOrderOffset + stepIndex,
     );
     if (parentStepId) {
       ensureTraceNode(
         nodes,
         parentStepId,
-        step.parentStepName ?? parentStepId,
+        parentStepId,
         "supervisor",
         undefined,
         undefined,
@@ -729,25 +803,26 @@ function buildStructuredAgentTraceData(
   }
 
   for (const [messageIndex, message] of messages.entries()) {
-    const resolvedStepId = message.stepId;
-    const resolvedParentStepId = message.parentStepId;
+    const resolvedStepId = message.step?.id;
+    const resolvedParentStepId = message.step?.parentId;
     if (
       resolvedStepId &&
       hasStructuredAgentIdentity({
-        stepId: message.stepId,
-        parentStepId: message.parentStepId,
-        stepKind: message.stepKind,
-        stepName: message.stepName,
-        parentStepName: message.parentStepName,
+        stepId: message.step?.id,
+        parentStepId: message.step?.parentId,
+        stepKind: message.step?.kind,
+        stepName: message.step?.name,
       })
     ) {
       const node = ensureTraceNode(
         nodes,
         resolvedStepId,
-        message.stepName ?? resolvedStepId,
-        message.stepKind,
+        message.step?.name ?? resolvedStepId,
+        message.step?.kind,
         resolvedParentStepId,
-        message.parentStepName,
+        resolvedParentStepId
+          ? nodes[resolvedParentStepId]?.stepName
+          : undefined,
         messageIndex,
       );
       node.messages.push(message);
@@ -762,7 +837,7 @@ function buildStructuredAgentTraceData(
         ensureTraceNode(
           nodes,
           resolvedParentStepId,
-          message.parentStepName ?? resolvedParentStepId,
+          resolvedParentStepId,
           "supervisor",
           undefined,
           undefined,
@@ -821,54 +896,72 @@ function buildCanonicalAgentTraceData(
     if (!traceValue) continue;
 
     if (traceValue.type === "span.start") {
+      const traceOwner = getTraceOwner(traceValue);
       const namespaceRoot = getCheckpointNamespaceRoot(traceValue);
       const resolvedParentSpanId = traceValue.parentSpanId
         ? resolveSpanId(traceValue.parentSpanId)
         : undefined;
-      const logicalSpanKey =
-        namespaceRoot &&
-        !(traceValue.kind === "supervisor" && !resolvedParentSpanId)
-          ? [
-              traceValue.kind,
-              traceValue.name,
-              resolvedParentSpanId ?? "root",
-              namespaceRoot,
-            ].join("|")
+      let spanId: string;
+      let parentSpanId: string | undefined;
+      let stepName = traceValue.name;
+      let ownerMeta: ExecutionOwner | undefined;
+
+      const logicalOwnerId = getLogicalTraceOwnerId(traceValue);
+      const logicalParentOwnerId = getLogicalTraceParentOwnerId(traceValue);
+
+      if (traceOwner?.key && logicalOwnerId) {
+        spanId = logicalOwnerId;
+        parentSpanId = logicalParentOwnerId ?? resolvedParentSpanId;
+        stepName = traceOwner.type;
+        ownerMeta = traceOwner;
+        spanAliases.set(traceValue.spanId, spanId);
+      } else {
+        const logicalSpanKey =
+          namespaceRoot &&
+          !(traceValue.kind === "supervisor" && !resolvedParentSpanId)
+            ? [
+                traceValue.kind,
+                traceValue.name,
+                resolvedParentSpanId ?? "root",
+                namespaceRoot,
+              ].join("|")
+            : undefined;
+        const existingSupervisorRoot =
+          traceValue.kind === "supervisor" && !resolvedParentSpanId
+            ? Object.values(nodes).find(
+                (node) =>
+                  node.stepKind === "supervisor" &&
+                  !node.parentStepId &&
+                  node.stepName === traceValue.name,
+              )
+            : undefined;
+        const existingLogicalSpanId = logicalSpanKey
+          ? logicalSpanIds.get(logicalSpanKey)
           : undefined;
-      const existingSupervisorRoot =
-        traceValue.kind === "supervisor" && !resolvedParentSpanId
-          ? Object.values(nodes).find(
-              (node) =>
-                node.stepKind === "supervisor" &&
-                !node.parentStepId &&
-                node.stepName === traceValue.name,
-            )
-          : undefined;
-      const existingLogicalSpanId = logicalSpanKey
-        ? logicalSpanIds.get(logicalSpanKey)
-        : undefined;
-      const spanId =
-        existingSupervisorRoot?.stepId ??
-        existingLogicalSpanId ??
-        traceValue.spanId;
-      if (existingSupervisorRoot) {
-        spanAliases.set(traceValue.spanId, existingSupervisorRoot.stepId);
+        spanId =
+          existingSupervisorRoot?.stepId ??
+          existingLogicalSpanId ??
+          traceValue.spanId;
+        if (existingSupervisorRoot) {
+          spanAliases.set(traceValue.spanId, existingSupervisorRoot.stepId);
+        }
+        if (existingLogicalSpanId) {
+          spanAliases.set(traceValue.spanId, existingLogicalSpanId);
+        }
+        if (logicalSpanKey && !existingLogicalSpanId) {
+          logicalSpanIds.set(logicalSpanKey, spanId);
+        }
+        parentSpanId = resolvedParentSpanId;
       }
-      if (existingLogicalSpanId) {
-        spanAliases.set(traceValue.spanId, existingLogicalSpanId);
-      }
-      if (logicalSpanKey && !existingLogicalSpanId) {
-        logicalSpanIds.set(logicalSpanKey, spanId);
-      }
-      const parentSpanId = resolvedParentSpanId;
       const node = ensureTraceNode(
         nodes,
         spanId,
-        traceValue.name,
+        stepName,
         traceValue.kind,
         parentSpanId,
-        undefined,
+        parentSpanId ? nodes[parentSpanId]?.stepName : undefined,
         eventIndex,
+        ownerMeta,
       );
       node.active = true;
 
@@ -894,13 +987,15 @@ function buildCanonicalAgentTraceData(
     if (traceValue.type === "message.link") {
       messageSpanIds.set(
         traceValue.messageId,
-        resolveSpanId(traceValue.spanId),
+        getLogicalTraceOwnerId(traceValue) ?? resolveSpanId(traceValue.spanId),
       );
     }
 
     if (traceValue.type === "tool.link") {
       toolSpanIds.set(traceValue.toolCallId, {
-        spanId: resolveSpanId(traceValue.spanId),
+        spanId:
+          getLogicalTraceOwnerId(traceValue) ??
+          resolveSpanId(traceValue.spanId),
         traceOrder: eventIndex,
         ...(traceValue.toolCallName
           ? { toolCallName: traceValue.toolCallName }
@@ -915,25 +1010,34 @@ function buildCanonicalAgentTraceData(
       ) {
         messageSpanIds.set(
           traceValue.parentMessageId,
-          resolveSpanId(traceValue.spanId),
+          getLogicalTraceOwnerId(traceValue) ??
+            resolveSpanId(traceValue.spanId),
         );
       }
     }
   }
 
   for (const [messageIndex, message] of messages.entries()) {
-    let spanId = messageSpanIds.get(message.id);
+    let spanId =
+      getLogicalOwnerNodeId(message.owner) ?? messageSpanIds.get(message.id);
     if (!spanId && message.role === "assistant") {
       spanId = (message.toolCalls ?? [])
-        .map((toolCall) => toolSpanIds.get(toolCall.id)?.spanId)
+        .map(
+          (toolCall) =>
+            getLogicalOwnerNodeId(toolCall.owner) ??
+            toolSpanIds.get(toolCall.id)?.spanId,
+        )
         .find((item): item is string => Boolean(item));
     }
     if (!spanId && message.role === "tool" && message.toolCallId) {
-      spanId = toolSpanIds.get(message.toolCallId)?.spanId;
+      spanId =
+        getLogicalOwnerNodeId(message.owner) ??
+        toolSpanIds.get(message.toolCallId)?.spanId;
     }
 
     if (spanId && nodes[spanId]) {
       const node = nodes[spanId]!;
+      node.owner ||= message.owner;
       node.messages.push(message);
       node.messageOrders[message.id] = messageIndex;
       if (node.order === undefined || messageIndex < node.order) {
@@ -951,13 +1055,25 @@ function buildCanonicalAgentTraceData(
     }
 
     for (const toolCall of message.toolCalls ?? []) {
-      const owner = toolSpanIds.get(toolCall.id);
+      const logicalToolOwnerId = getLogicalOwnerNodeId(toolCall.owner);
+      const owner = logicalToolOwnerId
+        ? {
+            spanId: logicalToolOwnerId,
+            traceOrder: messageIndex,
+            toolCallName: toolCall.function.name,
+          }
+        : toolSpanIds.get(toolCall.id);
       const ownerNode = owner ? nodes[owner.spanId] : undefined;
       if (
         ownerNode &&
         !ownerNode.toolCalls.some((item) => item.id === toolCall.id)
       ) {
-        ownerNode.toolCalls.push(toolCall);
+        ownerNode.toolCalls.push({
+          ...toolCall,
+          ...(toolCall.owner || ownerNode.owner
+            ? { owner: toolCall.owner ?? ownerNode.owner }
+            : {}),
+        });
       }
       if (ownerNode) {
         ownerNode.toolOrders[toolCall.id] =
@@ -990,6 +1106,7 @@ function buildCanonicalAgentTraceData(
         arguments: "",
       },
       complete: Boolean(resultMessage),
+      ...(node.owner ? { owner: node.owner } : {}),
     });
     node.toolOrders[toolCallId] =
       resultMessageIndex >= 0 ? resultMessageIndex : owner.traceOrder;
