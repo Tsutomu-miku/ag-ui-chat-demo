@@ -64,12 +64,12 @@ export const AGENT_LABELS: Record<
   supervisor: { label: "Supervisor", badge: "SV", role: "Coordinator" },
   researcher: { label: "Researcher", badge: "RS", role: "Sub-agent" },
   weather_researcher: {
-    label: "Researcher",
+    label: "Weather Researcher",
     badge: "RS",
     role: "Weather specialist",
   },
   travel_guidance_researcher: {
-    label: "Researcher",
+    label: "Travel Researcher",
     badge: "RS",
     role: "Travel guidance",
   },
@@ -293,6 +293,10 @@ export function isDelegationTool(name: string): boolean {
     name === "forward_message" ||
     name.startsWith("transfer_to_")
   );
+}
+
+export function isInternalDelegationTool(name: string): boolean {
+  return name === "transfer_back_to_supervisor";
 }
 
 export function getDelegatedAgent(

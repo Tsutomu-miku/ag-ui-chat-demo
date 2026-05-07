@@ -17,6 +17,7 @@ import {
   getToolInputDisplay,
   getToolResultDisplay,
   getToolInfo,
+  isInternalDelegationTool,
   isSupervisorWrapUpText,
   isDelegationTool,
 } from "./model";
@@ -457,6 +458,19 @@ function getNodeRenderOrder(
   );
 }
 
+function isAnchoredDelegationTool(
+  _agent: AgentTraceNode,
+  toolCall: ToolCallFunction,
+  childStepIds: string[],
+  traceData: NonNullable<ReturnType<typeof buildAgentTraceData>>,
+): boolean {
+  if (!isDelegationTool(toolCall.function.name)) return false;
+  return childStepIds.some((childStepId) => {
+    const child = traceData.nodes[childStepId];
+    return child ? getDelegatedAgent(toolCall) === child.stepName : false;
+  });
+}
+
 export function buildAgentRenderItems(
   agent: AgentTraceNode,
   childStepIds: string[],
@@ -510,6 +524,10 @@ export function buildAgentRenderItems(
       if (renderedToolIds.has(renderItem.toolCallId)) continue;
       const toolCall = toolCallById.get(renderItem.toolCallId);
       if (toolCall) {
+        if (isInternalDelegationTool(toolCall.function.name)) continue;
+        if (isAnchoredDelegationTool(agent, toolCall, childStepIds, traceData)) {
+          continue;
+        }
         items.push({ type: "tool", toolCall, order: items.length });
         renderedStandaloneToolIds.add(toolCall.id);
       }
@@ -526,6 +544,10 @@ export function buildAgentRenderItems(
   for (const toolCall of agent.toolCalls) {
     if (renderedToolIds.has(toolCall.id)) continue;
     if (renderedStandaloneToolIds.has(toolCall.id)) continue;
+    if (isInternalDelegationTool(toolCall.function.name)) continue;
+    if (isAnchoredDelegationTool(agent, toolCall, childStepIds, traceData)) {
+      continue;
+    }
     items.push({ type: "tool", toolCall, order: items.length });
   }
 
@@ -591,7 +613,11 @@ function TraceMessageBlock({
       )}
 
       {(message.toolCalls ?? [])
-        .filter((toolCall) => !hiddenToolCallIds.has(toolCall.id))
+        .filter(
+          (toolCall) =>
+            !hiddenToolCallIds.has(toolCall.id) &&
+            !isInternalDelegationTool(toolCall.function.name),
+        )
         .map((toolCall) => (
           <TraceToolCall
             key={toolCall.id}

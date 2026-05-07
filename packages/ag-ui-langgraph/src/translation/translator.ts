@@ -7,6 +7,7 @@ import type {
   State,
 } from "../types.js";
 import { CustomEventNames, LangGraphEventTypes } from "../types.js";
+import { normalizeCheckpointNamespace } from "../trace.js";
 import {
   contentToString,
   jsonSafeStringify,
@@ -32,6 +33,24 @@ import {
 
 export type { EventTranslatorContext } from "./context.js";
 
+function getMessageStreamKey(
+  event: LangGraphStreamEvent,
+  outerRunId: string,
+): string {
+  const metadata = event.metadata ?? {};
+  const checkpointNamespace = normalizeCheckpointNamespace(
+    typeof metadata.langgraph_checkpoint_ns === "string"
+      ? metadata.langgraph_checkpoint_ns
+      : undefined,
+  );
+  const namespaceInstance = checkpointNamespace?.split("|")[0]?.trim();
+  const nodeName =
+    typeof metadata.langgraph_node === "string" && metadata.langgraph_node
+      ? metadata.langgraph_node
+      : event.name || "assistant";
+  return `${outerRunId}:${namespaceInstance || nodeName}`;
+}
+
 export async function* translateSingleEvent(
   event: LangGraphStreamEvent,
   ctx: EventTranslatorContext,
@@ -40,6 +59,7 @@ export async function* translateSingleEvent(
   const eventData = getEventDataRecord(event);
   const metadata = event.metadata ?? {};
   const runId = ctx.activeRun.id;
+  const streamKey = getMessageStreamKey(event, runId);
 
   if (eventType === LangGraphEventTypes.OnChatModelStream) {
     const shouldEmitMessages = metadata["emit-messages"] !== false;
@@ -54,7 +74,7 @@ export async function* translateSingleEvent(
 
     if (responseMeta.finish_reason) return;
 
-    const currentStream = ctx.getMessageInProgress(runId);
+    const currentStream = ctx.getMessageInProgress(streamKey);
     const hasCurrentStream = Boolean(currentStream?.id);
     const hasToolCallChunks = toolCallChunks.length > 0;
 
@@ -131,7 +151,7 @@ export async function* translateSingleEvent(
         messageId: currentStream.id,
       } as BaseEvent);
       if (ev) yield ev;
-      ctx.clearMessageInProgress(runId);
+      ctx.clearMessageInProgress(streamKey);
       return;
     }
 
@@ -187,7 +207,7 @@ export async function* translateSingleEvent(
         }
       }
 
-      ctx.setMessageInProgress(runId, {
+      ctx.setMessageInProgress(streamKey, {
         id: parentMessageId,
         text_started: currentStream?.text_started === true,
         tool_call_id: null,
@@ -210,13 +230,13 @@ export async function* translateSingleEvent(
         } as BaseEvent);
         if (startEv) yield startEv;
 
-        ctx.setMessageInProgress(runId, {
+        ctx.setMessageInProgress(streamKey, {
           id: messageId,
           text_started: true,
         });
       }
 
-      const current = ctx.getMessageInProgress(runId);
+      const current = ctx.getMessageInProgress(streamKey);
       const contentEv = ctx.dispatchEvent({
         type: EventType.TEXT_MESSAGE_CONTENT,
         messageId: current?.id ?? currentStream?.id ?? chunkId,
@@ -229,7 +249,7 @@ export async function* translateSingleEvent(
   }
 
   if (eventType === LangGraphEventTypes.OnChatModelEnd) {
-    const currentStream = ctx.getMessageInProgress(runId);
+    const currentStream = ctx.getMessageInProgress(streamKey);
     const activeToolCalls = currentStream?.active_tool_calls ?? {};
     const activeToolCallIds = Object.keys(activeToolCalls);
     const hasTextStarted = currentStream?.text_started === true;
@@ -283,7 +303,7 @@ export async function* translateSingleEvent(
       if (waitsForFrontendTool) {
         ctx.activeRun.wait_for_frontend_tool = true;
       }
-      ctx.clearMessageInProgress(runId);
+      ctx.clearMessageInProgress(streamKey);
       return;
     }
 
@@ -302,18 +322,18 @@ export async function* translateSingleEvent(
       ) {
         ctx.activeRun.wait_for_frontend_tool = true;
       }
-      ctx.clearMessageInProgress(runId);
+      ctx.clearMessageInProgress(streamKey);
     } else if (currentStream?.id && hasTextStarted) {
       const ev = ctx.dispatchEvent({
         type: EventType.TEXT_MESSAGE_END,
         messageId: currentStream.id,
       } as BaseEvent);
       if (ev) {
-        ctx.clearMessageInProgress(runId);
+        ctx.clearMessageInProgress(streamKey);
         yield ev;
       }
     } else if (currentStream?.id) {
-      ctx.clearMessageInProgress(runId);
+      ctx.clearMessageInProgress(streamKey);
     }
     return;
   }

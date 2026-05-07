@@ -9,7 +9,23 @@
 
 import type { BaseEvent } from "@ag-ui/core";
 import type { RunAgentInput } from "@ag-ui/core";
-import { createSupervisor, type LangGraphAgent } from "ag-ui-langgraph";
+import { HumanMessage, ToolMessage } from "@langchain/core/messages";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+import { tool } from "@langchain/core/tools";
+import {
+  Command,
+  END,
+  getCurrentTaskInput,
+  MessagesAnnotation,
+  Send,
+  START,
+  StateGraph,
+} from "@langchain/langgraph";
+import { createReactAgent as createLangGraphReactAgent } from "@langchain/langgraph/prebuilt";
+import { LangGraphAgent } from "ag-ui-langgraph";
+import type { LocalCompiledGraph } from "ag-ui-langgraph";
+import { v4 as uuid } from "uuid";
+import { z } from "zod";
 
 import { frontendInteractionTools } from "./tools.js";
 import {
@@ -55,33 +71,264 @@ Use confirm_action before high-impact actions such as deployments, purchases, de
 // Lazy singleton — avoids module-load-time env errors
 let _agent: LangGraphAgent | null = null;
 
-function getAgent(): LangGraphAgent {
-  if (!_agent) {
-    const model = createAgentModel();
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-    // Build a real LangGraph Supervisor topology and wrap the compiled graph.
-    _agent = createSupervisor({
-      name: "supervisor",
-      model,
-      tools: frontendInteractionTools,
-      systemPrompt: SUPERVISOR_SYSTEM_PROMPT,
-      outputMode: "full_history",
-      subAgents: {
-        weather_researcher: {
-          systemPrompt: WEATHER_RESEARCHER_SYSTEM_PROMPT,
-          tools: researcherTools,
-        },
-        travel_guidance_researcher: {
-          systemPrompt: TRAVEL_GUIDANCE_RESEARCHER_SYSTEM_PROMPT,
-          tools: researcherTools,
-        },
-        writer: {
-          systemPrompt: WRITER_SYSTEM_PROMPT,
-          tools: writerTools,
-        },
+function currentTaskMessages() {
+  const state = getCurrentTaskInput();
+  if (!isRecord(state) || !Array.isArray(state.messages)) return [];
+  return state.messages;
+}
+
+function buildHandoffToolMessage(name: string, toolCallId?: string) {
+  return new ToolMessage({
+    content: "Successfully transferred control",
+    name,
+    tool_call_id: toolCallId ?? uuid(),
+  });
+}
+
+function buildReturnToSupervisorMessage(
+  sourceNode: string,
+  findings: string,
+  toolCallId?: string,
+) {
+  return new ToolMessage({
+    content: `Return from ${sourceNode}:\n${findings}`,
+    name: "transfer_back_to_supervisor",
+    tool_call_id: toolCallId ?? uuid(),
+  });
+}
+
+function createSingleAgentHandoffTool(
+  name: string,
+  targetNode: "weather_researcher" | "travel_guidance_researcher" | "writer",
+  description: string,
+): StructuredToolInterface {
+  return tool(
+    async (
+      input: {
+        input: string;
       },
-    });
-  }
+      config,
+    ) =>
+      new Command({
+        graph: Command.PARENT,
+        goto: [
+          new Send(targetNode, {
+            messages: [new HumanMessage(input.input)],
+          }),
+        ],
+        update: {
+          messages: [
+            ...currentTaskMessages(),
+            buildHandoffToolMessage(name, config?.toolCall?.id),
+          ],
+        },
+      }),
+    {
+      name,
+      description,
+      schema: z.object({
+        input: z.string().min(1).describe("The exact task for the sub-agent."),
+      }),
+    },
+  );
+}
+
+function createParallelResearchTool(): StructuredToolInterface {
+  return tool(
+    async (
+      input: {
+        weatherTask: string;
+        travelGuidanceTask: string;
+      },
+      config,
+    ) =>
+      new Command({
+        graph: Command.PARENT,
+        goto: [
+          new Send("weather_researcher", {
+            messages: [new HumanMessage(input.weatherTask)],
+          }),
+          new Send("travel_guidance_researcher", {
+            messages: [new HumanMessage(input.travelGuidanceTask)],
+          }),
+        ],
+        update: {
+          messages: [
+            ...currentTaskMessages(),
+            buildHandoffToolMessage(
+              "start_parallel_research",
+              config?.toolCall?.id,
+            ),
+          ],
+        },
+      }),
+    {
+      name: "start_parallel_research",
+      description:
+        "Launch the weather researcher and travel-guidance researcher in parallel with two distinct explicit tasks.",
+      schema: z.object({
+        weatherTask: z
+          .string()
+          .min(1)
+          .describe("The exact task for the weather researcher."),
+        travelGuidanceTask: z
+          .string()
+          .min(1)
+          .describe("The exact task for the travel-guidance researcher."),
+      }),
+    },
+  );
+}
+
+function createReturnToSupervisorTool(
+  sourceNode: "weather_researcher" | "travel_guidance_researcher" | "writer",
+): StructuredToolInterface {
+  return tool(
+    async (
+      input: {
+        input: string;
+      },
+      config,
+    ) =>
+      new Command({
+        graph: Command.PARENT,
+        goto: "supervisor",
+        update: {
+          messages: [
+            ...currentTaskMessages(),
+            buildReturnToSupervisorMessage(
+              sourceNode,
+              input.input,
+              config?.toolCall?.id,
+            ),
+          ],
+        },
+      }),
+    {
+      name: "transfer_back_to_supervisor",
+      description:
+        "Return control to the supervisor with the exact completed findings or draft in the input field.",
+      schema: z.object({
+        input: z
+          .string()
+          .min(1)
+          .describe("The exact findings, guidance, or draft to hand back."),
+      }),
+    },
+  );
+}
+
+function getAgent(): LangGraphAgent {
+  if (_agent) return _agent;
+
+  const model = createAgentModel();
+  const startParallelResearch = createParallelResearchTool();
+  const transferToWeatherResearcher = createSingleAgentHandoffTool(
+    "transfer_to_weather_researcher",
+    "weather_researcher",
+    "Transfer control to the weather researcher with an explicit weather-focused task.",
+  );
+  const transferToTravelGuidanceResearcher = createSingleAgentHandoffTool(
+    "transfer_to_travel_guidance_researcher",
+    "travel_guidance_researcher",
+    "Transfer control to the travel-guidance researcher with an explicit guidance-focused task.",
+  );
+  const transferToWriter = createSingleAgentHandoffTool(
+    "transfer_to_writer",
+    "writer",
+    "Transfer control to the writer with the exact brief to turn into the final note.",
+  );
+  const returnFromWeatherResearcher =
+    createReturnToSupervisorTool("weather_researcher");
+  const returnFromTravelGuidanceResearcher = createReturnToSupervisorTool(
+    "travel_guidance_researcher",
+  );
+  const returnFromWriter = createReturnToSupervisorTool("writer");
+  const weatherResearcher = createLangGraphReactAgent({
+    llm: model,
+    tools: [...researcherTools, returnFromWeatherResearcher],
+    name: "weather_researcher",
+    prompt: `${WEATHER_RESEARCHER_SYSTEM_PROMPT}
+
+Completion rule:
+- When you have completed the assigned weather research, you MUST call transfer_back_to_supervisor.
+- Put the actual findings you want the supervisor to use into the tool argument "input".
+- Do not answer the end user directly and do not stop without calling transfer_back_to_supervisor.`,
+  });
+  const supervisor = createLangGraphReactAgent({
+    llm: model,
+    tools: [
+      ...frontendInteractionTools,
+      startParallelResearch,
+      transferToWeatherResearcher,
+      transferToTravelGuidanceResearcher,
+      transferToWriter,
+    ],
+    name: "supervisor",
+    prompt: `${SUPERVISOR_SYSTEM_PROMPT}
+
+Coordination rule:
+- You are the only agent allowed to communicate the final answer to the user.
+- Before delegating, give a short coordination update in your own voice.
+- After any sub-agent returns, read the returned findings, then decide the next step yourself.
+- After the writer returns, produce the final answer yourself instead of delegating again.
+- Treat transfer_back_to_supervisor results as worker outputs for your decision-making.`,
+  });
+  const travelGuidanceResearcher = createLangGraphReactAgent({
+    llm: model,
+    tools: [...researcherTools, returnFromTravelGuidanceResearcher],
+    name: "travel_guidance_researcher",
+    prompt: `${TRAVEL_GUIDANCE_RESEARCHER_SYSTEM_PROMPT}
+
+Additional constraint:
+- Do NOT call get_weather yourself
+- Focus on destination-specific activity, clothing, and packing guidance using the user request and general travel research
+
+Completion rule:
+- When you have completed the assigned guidance task, you MUST call transfer_back_to_supervisor.
+- Put the actual guidance you want the supervisor to use into the tool argument "input".
+- Do not answer the end user directly and do not stop without calling transfer_back_to_supervisor.`,
+  });
+  const writer = createLangGraphReactAgent({
+    llm: model,
+    tools: [...writerTools, returnFromWriter],
+    name: "writer",
+    prompt: `${WRITER_SYSTEM_PROMPT}
+
+Completion rule:
+- When you finish the requested draft, you MUST call transfer_back_to_supervisor.
+- Put the exact final draft into the tool argument "input".
+- Do not present yourself as the final speaker to the user and do not stop without calling transfer_back_to_supervisor.`,
+  });
+
+  const graph = new StateGraph(MessagesAnnotation)
+    .addNode("supervisor", supervisor, {
+      ends: ["weather_researcher", "travel_guidance_researcher", "writer", END],
+    })
+    .addNode("weather_researcher", weatherResearcher, {
+      ends: ["supervisor"],
+    })
+    .addNode("travel_guidance_researcher", travelGuidanceResearcher, {
+      ends: ["supervisor"],
+    })
+    .addNode("writer", writer, {
+      ends: ["supervisor"],
+    })
+    .addEdge(START, "supervisor")
+    .compile({
+      name: "supervisor",
+    }) as LocalCompiledGraph;
+
+  _agent = new LangGraphAgent({
+    name: "supervisor",
+    graph,
+    subAgents: ["weather_researcher", "travel_guidance_researcher", "writer"],
+  });
+
   return _agent;
 }
 
@@ -89,7 +336,7 @@ function getAgent(): LangGraphAgent {
 
 export async function* runLangGraphAgent(
   input: RunAgentInput,
-  signal?: AbortSignal,
+  _signal?: AbortSignal,
 ): AsyncGenerator<BaseEvent> {
   // clone() per request for isolated state (aligned with Python pattern)
   yield* getAgent().clone().run(input);

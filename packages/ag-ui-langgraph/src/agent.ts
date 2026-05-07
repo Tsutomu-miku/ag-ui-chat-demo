@@ -167,6 +167,7 @@ export class LangGraphAgent {
   /** Per-request mutable state (reset on clone) */
   protected messagesInProgress: MessagesInProgressRecord = {};
   protected activeRun: RunMetadata | null = null;
+  protected traceRunId: string | null = null;
   protected traceState: TraceState = createTraceState();
 
   /** Subgraph detection */
@@ -257,6 +258,7 @@ export class LangGraphAgent {
   protected getTraceContext(): TraceStateContext {
     return {
       agentName: this.name,
+      traceRunId: this.traceRunId,
       activeRun: this.activeRun,
       currentSubgraph: this.currentSubgraph,
       subgraphs: this.subgraphs,
@@ -304,10 +306,6 @@ export class LangGraphAgent {
     );
   }
 
-  protected getActiveTraceOwner(): TraceOwnerMetadata | undefined {
-    return this.traceState.activeTraceSpan?.owner;
-  }
-
   protected getOwnerMetadataForEvent(
     event: BaseEvent &
       Partial<{
@@ -341,7 +339,7 @@ export class LangGraphAgent {
       if (ownerKey) return this.traceState.traceOwners.get(ownerKey) ?? null;
     }
 
-    return this.getActiveTraceOwner() ?? null;
+    return null;
   }
 
   protected attachTraceOwnerToEvent(event: BaseEvent): BaseEvent {
@@ -383,7 +381,7 @@ export class LangGraphAgent {
     if (activeSpan.name !== nextStepName) return;
 
     const nextOwner = buildTraceOwnerFromSource({
-      runId: this.activeRun?.id,
+      runId: this.traceRunId ?? this.activeRun?.id,
       stepName: nextStepName,
       kind: this.classifyTraceStepKind(nextStepName),
       event: sourceEvent,
@@ -817,6 +815,7 @@ export class LangGraphAgent {
     const forwardedProps = input.forwarded_props ?? {};
 
     this.activeRun = createRunMetadata({ runId, threadId });
+    this.traceRunId = runId;
     resetTraceState(this.traceState);
 
     for (const plugin of this.plugins) {
@@ -962,11 +961,6 @@ export class LangGraphAgent {
           typeof metadata.langgraph_node === "string"
             ? metadata.langgraph_node
             : undefined;
-        const eventRunId = event.run_id;
-        if (typeof eventRunId === "string" && eventRunId) {
-          this.activeRun.id = eventRunId;
-        }
-
         let exitingNode = false;
 
         if (
@@ -1115,6 +1109,7 @@ export class LangGraphAgent {
         plugin.onRunFinish?.(this.getPluginContext());
       }
       resetTraceState(this.traceState);
+      this.traceRunId = null;
       this.activeRun = null;
     }
   }
