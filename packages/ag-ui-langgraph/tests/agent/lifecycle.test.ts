@@ -967,7 +967,7 @@ describe("event translation: step management", () => {
     expect(toolResult?.stepKind).toBe("node");
   });
 
-  it("stamps agent instance attribution in-band without custom trace spans", async () => {
+  it("stamps agent instance attribution in-band while keeping canonical trace events", async () => {
     const graph = createMockGraph([
       ...textStreamEvents("Routing", "supervisor", "msg-supervisor-1"),
       ...textStreamEvents("Draft", "writer", "msg-writer-1"),
@@ -985,7 +985,7 @@ describe("event translation: step management", () => {
           event.type === EventType.CUSTOM &&
           (event as { name?: string }).name === "ag-ui.trace",
       ),
-    ).toBe(false);
+    ).toBe(true);
 
     type Stamped = BaseEvent & {
       messageId?: string;
@@ -2035,7 +2035,7 @@ describe("full agent loop", () => {
     expect((toolResults[1] as any).content).toBe("result-b");
   });
 
-  it("updates run_id from event stream", async () => {
+  it("keeps the outer runId stable when stream events carry internal run_id values", async () => {
     const graph = createMockGraph([
       {
         event: LangGraphEventTypes.OnChatModelStream,
@@ -2060,7 +2060,8 @@ describe("full agent loop", () => {
     const finished = events.find(
       (e) => e.type === EventType.RUN_FINISHED,
     ) as any;
-    // run_id should be updated from the stream event
-    expect(finished.runId).toBe("updated-run-id");
+    // The outer AG-UI runId must stay stable and must not be overwritten by
+    // internal LangGraph event run_id values.
+    expect(finished.runId).toBe("run-1");
   });
 });

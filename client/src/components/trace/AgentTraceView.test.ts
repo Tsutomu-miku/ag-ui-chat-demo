@@ -31,9 +31,11 @@ describe("AgentTraceView ordering", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-supervisor-1", "Routing to writer", {
-          stepId: "step-supervisor-1",
-          stepName: "supervisor",
-          stepKind: "supervisor",
+          step: {
+            id: "step-supervisor-1",
+            name: "supervisor",
+            kind: "supervisor",
+          },
         }),
         toolCalls: [
           {
@@ -44,39 +46,43 @@ describe("AgentTraceView ordering", () => {
               arguments: '{"task":"calculate and explain"}',
             },
             complete: true,
-            stepId: "step-supervisor-1",
-            stepName: "supervisor",
-            stepKind: "supervisor",
+            step: {
+              id: "step-supervisor-1",
+              name: "supervisor",
+              kind: "supervisor",
+            },
           },
         ],
       },
       assistantMessage("assistant-writer-1", "Working on the calculation", {
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       }),
       assistantMessage("assistant-supervisor-2", "Perfect! I've completed your request.", {
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: {
+          id: "step-supervisor-1",
+          name: "supervisor",
+          kind: "supervisor",
+        },
       }),
     ];
     const traceEvents: TraceEvent[] = [
       {
         type: "STEP_STARTED",
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: { id: "step-supervisor-1", name: "supervisor", kind: "supervisor" },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       },
     ];
 
@@ -111,9 +117,11 @@ describe("AgentTraceView ordering", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-supervisor-1", "Routing to writer", {
-          stepId: "step-supervisor-1",
-          stepName: "supervisor",
-          stepKind: "supervisor",
+          step: {
+            id: "step-supervisor-1",
+            name: "supervisor",
+            kind: "supervisor",
+          },
         }),
         toolCalls: [
           {
@@ -124,24 +132,29 @@ describe("AgentTraceView ordering", () => {
               arguments: '{"task":"draft"}',
             },
             complete: true,
-            stepId: "step-supervisor-1",
-            stepName: "supervisor",
-            stepKind: "supervisor",
+            step: {
+              id: "step-supervisor-1",
+              name: "supervisor",
+              kind: "supervisor",
+            },
           },
         ],
       },
       assistantMessage("assistant-writer-1", "Writer output", {
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       }),
       {
         ...assistantMessage("assistant-supervisor-2", "Routing to researcher", {
-          stepId: "step-supervisor-1",
-          stepName: "supervisor",
-          stepKind: "supervisor",
+          step: {
+            id: "step-supervisor-1",
+            name: "supervisor",
+            kind: "supervisor",
+          },
         }),
         toolCalls: [
           {
@@ -152,47 +165,52 @@ describe("AgentTraceView ordering", () => {
               arguments: '{"task":"verify"}',
             },
             complete: true,
-            stepId: "step-supervisor-1",
-            stepName: "supervisor",
-            stepKind: "supervisor",
+            step: {
+              id: "step-supervisor-1",
+              name: "supervisor",
+              kind: "supervisor",
+            },
           },
         ],
       },
       assistantMessage("assistant-researcher-1", "Researcher output", {
-        stepId: "step-researcher-1",
-        stepName: "researcher",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-researcher-1",
+          name: "researcher",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       }),
       assistantMessage("assistant-supervisor-3", "Perfect! I've completed your request.", {
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: {
+          id: "step-supervisor-1",
+          name: "supervisor",
+          kind: "supervisor",
+        },
       }),
     ];
     const traceEvents: TraceEvent[] = [
       {
         type: "STEP_STARTED",
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: { id: "step-supervisor-1", name: "supervisor", kind: "supervisor" },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-researcher-1",
-        stepName: "researcher",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-researcher-1",
+          name: "researcher",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       },
     ];
 
@@ -283,33 +301,35 @@ describe("AgentTraceView ordering", () => {
         "assistant-supervisor-1",
         "I'll transfer this request to the writer agent.",
         {
-          stepId: "step-supervisor-1",
-          stepName: "supervisor",
-          stepKind: "supervisor",
+          step: {
+            id: "step-supervisor-1",
+            name: "supervisor",
+            kind: "supervisor",
+          },
         },
       ),
       assistantMessage("assistant-writer-1", "Writer output", {
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       }),
     ];
     const traceEvents: TraceEvent[] = [
       {
         type: "STEP_STARTED",
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: { id: "step-supervisor-1", name: "supervisor", kind: "supervisor" },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       },
     ];
 
@@ -336,9 +356,11 @@ describe("AgentTraceView ordering", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-supervisor-1", "Routing to writer", {
-          stepId: "step-supervisor-1",
-          stepName: "supervisor",
-          stepKind: "supervisor",
+          step: {
+            id: "step-supervisor-1",
+            name: "supervisor",
+            kind: "supervisor",
+          },
         }),
         toolCalls: [
           {
@@ -349,34 +371,36 @@ describe("AgentTraceView ordering", () => {
               arguments: '{"input":"Calculate (23 * 45) + (67 / 3) and explain it."}',
             },
             complete: true,
-            stepId: "step-supervisor-1",
-            stepName: "supervisor",
-            stepKind: "supervisor",
+            step: {
+              id: "step-supervisor-1",
+              name: "supervisor",
+              kind: "supervisor",
+            },
           },
         ],
       },
       assistantMessage("assistant-writer-1", "Working on the calculation", {
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       }),
     ];
     const traceEvents: TraceEvent[] = [
       {
         type: "STEP_STARTED",
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: { id: "step-supervisor-1", name: "supervisor", kind: "supervisor" },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       },
     ];
 
@@ -600,9 +624,11 @@ describe("AgentTraceView ordering", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-supervisor-1", "Routing to writer", {
-          stepId: "step-supervisor-1",
-          stepName: "supervisor",
-          stepKind: "supervisor",
+          step: {
+            id: "step-supervisor-1",
+            name: "supervisor",
+            kind: "supervisor",
+          },
         }),
         toolCalls: [
           {
@@ -613,34 +639,36 @@ describe("AgentTraceView ordering", () => {
               arguments: '{"task":"draft"}',
             },
             complete: true,
-            stepId: "step-supervisor-1",
-            stepName: "supervisor",
-            stepKind: "supervisor",
+            step: {
+              id: "step-supervisor-1",
+              name: "supervisor",
+              kind: "supervisor",
+            },
           },
         ],
       },
       assistantMessage("assistant-writer-1", "Writer output", {
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       }),
     ];
     const traceEvents: TraceEvent[] = [
       {
         type: "STEP_STARTED",
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: { id: "step-supervisor-1", name: "supervisor", kind: "supervisor" },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       },
     ];
 
@@ -878,11 +906,12 @@ describe("AgentTraceView ordering", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-writer-1", "Searching...", {
-          stepId: "step-writer-1",
-          stepName: "writer",
-          stepKind: "subagent",
-          parentStepId: "step-supervisor-1",
-          parentStepName: "supervisor",
+          step: {
+            id: "step-writer-1",
+            name: "writer",
+            kind: "subagent",
+            parentId: "step-supervisor-1",
+          },
           isStreaming: true,
         }),
         toolCalls: [
@@ -901,17 +930,16 @@ describe("AgentTraceView ordering", () => {
     const traceEvents: TraceEvent[] = [
       {
         type: "STEP_STARTED",
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: { id: "step-supervisor-1", name: "supervisor", kind: "supervisor" },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       },
     ];
 
@@ -1014,39 +1042,43 @@ describe("AgentTraceView ordering", () => {
           "assistant-supervisor-1",
           "I'll transfer this to the writer agent.",
           {
-            stepId: "step-supervisor-1",
-            stepName: "supervisor",
-            stepKind: "supervisor",
+            step: {
+              id: "step-supervisor-1",
+              name: "supervisor",
+              kind: "supervisor",
+            },
           },
         ),
       },
       assistantMessage("assistant-writer-1", "Draft complete.", {
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       }),
       assistantMessage("assistant-supervisor-2", "Perfect! I've completed your request.", {
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: {
+          id: "step-supervisor-1",
+          name: "supervisor",
+          kind: "supervisor",
+        },
       }),
     ];
     const traceEvents: TraceEvent[] = [
       {
         type: "STEP_STARTED",
-        stepId: "step-supervisor-1",
-        stepName: "supervisor",
-        stepKind: "supervisor",
+        step: { id: "step-supervisor-1", name: "supervisor", kind: "supervisor" },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-writer-1",
-        stepName: "writer",
-        stepKind: "subagent",
-        parentStepId: "step-supervisor-1",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          name: "writer",
+          kind: "subagent",
+          parentId: "step-supervisor-1",
+        },
       },
     ];
     const traceData = buildAgentTraceData(messages, [], traceEvents);

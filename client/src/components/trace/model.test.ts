@@ -30,11 +30,13 @@ function assistantMessage(
 
 function activeStep(stepName: string, parentStepName?: string): ActiveStep {
   return {
-    stepId: parentStepName ? `step-${stepName}-1` : `step-${stepName}-root`,
-    ...(parentStepName ? { parentStepId: `step-${parentStepName}-root` } : {}),
-    ...(parentStepName ? { stepKind: "subagent" } : { stepKind: "supervisor" }),
     stepName,
-    ...(parentStepName ? { parentStepName } : {}),
+    step: {
+      id: parentStepName ? `step-${stepName}-1` : `step-${stepName}-root`,
+      ...(parentStepName ? { parentId: `step-${parentStepName}-root` } : {}),
+      kind: parentStepName ? "subagent" : "supervisor",
+      name: stepName,
+    },
     startedAt: "2026-01-01T00:00:00.000Z",
   };
 }
@@ -69,7 +71,7 @@ describe("trace model", () => {
               arguments: '{"city":"Tokyo"}',
             },
             complete: true,
-            stepName: "assistant",
+            step: { name: "assistant" },
           },
         ],
       },
@@ -96,7 +98,7 @@ describe("trace model", () => {
               arguments: '{"task":"calculate and explain"}',
             },
             complete: true,
-            stepName: "supervisor",
+            step: { name: "supervisor" },
           },
         ],
       },
@@ -106,25 +108,32 @@ describe("trace model", () => {
           "The result is 1057.33...",
           "writer",
         ),
-        stepId: "step-writer-1",
-        parentStepId: "step-supervisor-root",
-        stepKind: "subagent",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          parentId: "step-supervisor-root",
+          kind: "subagent",
+          name: "writer",
+        },
       },
     ];
     const activeSteps: ActiveStep[] = [
       {
-        stepId: "step-supervisor-root",
         stepName: "supervisor",
-        stepKind: "supervisor",
+        step: {
+          id: "step-supervisor-root",
+          kind: "supervisor",
+          name: "supervisor",
+        },
         startedAt: "2026-01-01T00:00:00.000Z",
       },
       {
-        stepId: "step-writer-1",
-        parentStepId: "step-supervisor-root",
-        stepKind: "subagent",
         stepName: "writer",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          parentId: "step-supervisor-root",
+          kind: "subagent",
+          name: "writer",
+        },
         startedAt: "2026-01-01T00:00:00.000Z",
       },
     ];
@@ -312,22 +321,28 @@ describe("trace model", () => {
           "assistant-1",
           "I'll transfer this request to the writer agent.",
         ),
-        stepId: "step-node-1",
-        stepKind: "node",
+        step: {
+          id: "step-node-1",
+          kind: "node",
+        },
       },
       {
         id: "tool-1",
         role: "tool",
         content: "Successfully transferred to writer",
         toolCallId: "transfer-1",
-        stepId: "step-tools-1",
-        stepKind: "node",
+        step: {
+          id: "step-tools-1",
+          kind: "node",
+        },
         createdAt: "2026-01-01T00:00:01.000Z",
       },
       {
         ...assistantMessage("assistant-2", "Final answer from some node."),
-        stepId: "step-node-2",
-        stepKind: "node",
+        step: {
+          id: "step-node-2",
+          kind: "node",
+        },
       },
     ];
 
@@ -339,41 +354,49 @@ describe("trace model", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-writer-1", "Draft one", "writer"),
-        stepId: "step-writer-1",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          parentId: "step-supervisor-1",
+          kind: "subagent",
+          name: "writer",
+        },
       },
       {
         ...assistantMessage("assistant-writer-2", "Draft two", "writer"),
-        stepId: "step-writer-2",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-2",
+          parentId: "step-supervisor-1",
+          kind: "subagent",
+          name: "writer",
+        },
       },
     ];
     const traceEvents: TraceEvent[] = [
       {
         type: "STEP_STARTED",
-        stepId: "step-supervisor-1",
-        stepKind: "supervisor",
-        stepName: "supervisor",
+        step: {
+          id: "step-supervisor-1",
+          kind: "supervisor",
+          name: "supervisor",
+        },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-writer-1",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
-        stepName: "writer",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-1",
+          parentId: "step-supervisor-1",
+          kind: "subagent",
+          name: "writer",
+        },
       },
       {
         type: "STEP_STARTED",
-        stepId: "step-writer-2",
-        parentStepId: "step-supervisor-1",
-        stepKind: "subagent",
-        stepName: "writer",
-        parentStepName: "supervisor",
+        step: {
+          id: "step-writer-2",
+          parentId: "step-supervisor-1",
+          kind: "subagent",
+          name: "writer",
+        },
       },
     ];
 
@@ -599,12 +622,12 @@ describe("trace model", () => {
     const traceData = buildAgentTraceData(messages, [], traceEvents);
 
     expect(traceData?.roots).toEqual(["supervisor:supervisor:root"]);
-    expect(traceData?.nodes["supervisor:supervisor:root"]?.childStepIds).toEqual(
-      [
-        "weather_researcher:agent:shared",
-        "travel_guidance_researcher:agent:shared",
-      ],
-    );
+    expect(
+      traceData?.nodes["supervisor:supervisor:root"]?.childStepIds,
+    ).toEqual([
+      "weather_researcher:agent:shared",
+      "travel_guidance_researcher:agent:shared",
+    ]);
     expect(
       traceData?.nodes["weather_researcher:agent:shared"]?.messages.map(
         (message) => message.id,
@@ -791,15 +814,9 @@ describe("trace model", () => {
     const messages: ChatMessage[] = [
       {
         ...assistantMessage("assistant-writer-alpha", "Alpha draft", "writer"),
-        ownerKey: "run-1:writer:writer:alpha",
-        agentType: "writer",
-        instanceId: "writer:alpha",
       },
       {
         ...assistantMessage("assistant-writer-beta", "Beta draft", "writer"),
-        ownerKey: "run-1:writer:writer:beta",
-        agentType: "writer",
-        instanceId: "writer:beta",
       },
     ];
     const traceEvents: TraceEvent[] = [
@@ -813,8 +830,8 @@ describe("trace model", () => {
           name: "supervisor",
           kind: "supervisor",
           owner: {
-            ownerKey: "run-1:supervisor:supervisor:root",
-            agentType: "supervisor",
+            key: "run-1:supervisor:supervisor:root",
+            type: "supervisor",
             instanceId: "supervisor:root",
           },
         },
@@ -830,10 +847,10 @@ describe("trace model", () => {
           kind: "subagent",
           parentSpanId: "span-supervisor",
           owner: {
-            ownerKey: "run-1:writer:writer:alpha",
-            agentType: "writer",
+            key: "run-1:writer:writer:alpha",
+            type: "writer",
             instanceId: "writer:alpha",
-            parentOwnerKey: "run-1:supervisor:supervisor:root",
+            parentKey: "run-1:supervisor:supervisor:root",
           },
         },
       },
@@ -848,10 +865,10 @@ describe("trace model", () => {
           kind: "subagent",
           parentSpanId: "span-supervisor",
           owner: {
-            ownerKey: "run-1:writer:writer:beta",
-            agentType: "writer",
+            key: "run-1:writer:writer:beta",
+            type: "writer",
             instanceId: "writer:beta",
-            parentOwnerKey: "run-1:supervisor:supervisor:root",
+            parentKey: "run-1:supervisor:supervisor:root",
           },
         },
       },
@@ -863,7 +880,11 @@ describe("trace model", () => {
           type: "message.link",
           messageId: "assistant-writer-alpha",
           spanId: "span-writer-alpha",
-          ownerKey: "run-1:writer:writer:alpha",
+          owner: {
+            key: "run-1:writer:writer:alpha",
+            type: "writer",
+            instanceId: "writer:alpha",
+          },
         },
       },
       {
@@ -874,17 +895,27 @@ describe("trace model", () => {
           type: "message.link",
           messageId: "assistant-writer-beta",
           spanId: "span-writer-beta",
-          ownerKey: "run-1:writer:writer:beta",
+          owner: {
+            key: "run-1:writer:writer:beta",
+            type: "writer",
+            instanceId: "writer:beta",
+          },
         },
       },
     ];
 
     const traceData = buildAgentTraceData(messages, [], traceEvents);
 
-    expect(traceData?.nodes["run-1:writer:writer:alpha"]?.messages.map((message) => message.id))
-      .toEqual(["assistant-writer-alpha"]);
-    expect(traceData?.nodes["run-1:writer:writer:beta"]?.messages.map((message) => message.id))
-      .toEqual(["assistant-writer-beta"]);
+    expect(
+      traceData?.nodes["writer:writer:alpha"]?.messages.map(
+        (message) => message.id,
+      ),
+    ).toEqual(["assistant-writer-alpha"]);
+    expect(
+      traceData?.nodes["writer:writer:beta"]?.messages.map(
+        (message) => message.id,
+      ),
+    ).toEqual(["assistant-writer-beta"]);
   });
 
   it("keeps only latest unlinked canonical lifecycle events for an empty live turn", () => {
