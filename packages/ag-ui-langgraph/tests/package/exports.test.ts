@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   LangGraphEventTypes,
   CustomEventNames,
-  createProtocolTracePlugin,
+  mergeEventExtra,
 } from "../../src/index.js";
 
 describe("LangGraphEventTypes", () => {
@@ -37,8 +37,8 @@ describe("CustomEventNames", () => {
   });
 });
 
-describe("trace plugin exports", () => {
-  it("exports createProtocolTracePlugin", () => {
-    expect(createProtocolTracePlugin).toBeTypeOf("function");
+describe("event extension exports", () => {
+  it("exports mergeEventExtra", () => {
+    expect(mergeEventExtra).toBeTypeOf("function");
   });
 });

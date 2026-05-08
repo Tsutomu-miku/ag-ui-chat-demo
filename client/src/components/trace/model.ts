@@ -1,12 +1,24 @@
 import type {
   ActiveStep,
-  AgUiTraceEvent,
+  AgentEventRecord as AgUiAgentEventRecord,
   ChatMessage,
-  ExecutionOwner,
+  ExecutionStep,
   ToolCallFunction,
-  TraceEvent,
 } from "ag-ui-react";
-import { AG_UI_TRACE_EVENT_NAME } from "ag-ui-react";
+
+export type AgentEventRecord = AgUiAgentEventRecord;
+
+export interface VisualizationOwner {
+  key: string;
+  type: string;
+  instanceId: string;
+  parentKey?: string;
+}
+
+interface VisualizationPayload {
+  step?: ExecutionStep;
+  owner?: VisualizationOwner;
+}
 
 export type TraceMode = "none" | "timeline" | "agent";
 
@@ -21,7 +33,7 @@ export interface AgentTraceNode {
   stepKind?: string;
   parentStepId?: string;
   parentStepName?: string;
-  owner?: ExecutionOwner;
+  owner?: VisualizationOwner;
   active?: boolean;
   order?: number;
   messageOrders: Record<string, number>;
@@ -108,110 +120,74 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getCanonicalTraceValue(event: TraceEvent): AgUiTraceEvent | null {
-  if (event.type !== "CUSTOM" || event.name !== AG_UI_TRACE_EVENT_NAME) {
-    return null;
-  }
-  if (!isRecord(event.value) || typeof event.value.type !== "string") {
-    return null;
-  }
-
-  switch (event.value.type) {
-    case "span.start":
-      return typeof event.value.spanId === "string" &&
-        typeof event.value.name === "string" &&
-        typeof event.value.kind === "string"
-        ? (event.value as AgUiTraceEvent)
-        : null;
-    case "span.end":
-      return typeof event.value.spanId === "string"
-        ? (event.value as AgUiTraceEvent)
-        : null;
-    case "message.link":
-      return typeof event.value.spanId === "string" &&
-        typeof event.value.messageId === "string"
-        ? (event.value as AgUiTraceEvent)
-        : null;
-    case "tool.link":
-      return typeof event.value.spanId === "string" &&
-        typeof event.value.toolCallId === "string"
-        ? (event.value as AgUiTraceEvent)
-        : null;
-    default:
-      return null;
-  }
+function isInternalStepLabel(value?: string): boolean {
+  const normalized = value?.trim();
+  return (
+    normalized === "__start__" ||
+    normalized === "__end__" ||
+    normalized === "__"
+  );
 }
 
-function getCheckpointNamespaceRoot(
-  traceValue: AgUiTraceEvent,
-): string | undefined {
-  const source = isRecord((traceValue as { source?: unknown }).source)
-    ? ((traceValue as { source?: unknown }).source as Record<string, unknown>)
-    : undefined;
-  const checkpointNamespace =
-    typeof source?.checkpointNamespace === "string"
-      ? source.checkpointNamespace
+function getVisualizationPayload(value: {
+  extra?: Record<string, unknown>;
+}): VisualizationPayload | undefined {
+  const visualization = isRecord(value.extra?.visualization)
+    ? value.extra.visualization
+    : null;
+  if (!visualization) return undefined;
+
+  const step = isRecord(visualization.step) ? visualization.step : null;
+  const owner = isRecord(visualization.owner) ? visualization.owner : null;
+  const normalizedOwner =
+    typeof owner?.key === "string" &&
+    typeof owner.type === "string" &&
+    typeof owner.instanceId === "string"
+      ? {
+          key: owner.key,
+          type: owner.type,
+          instanceId: owner.instanceId,
+          ...(typeof owner.parentKey === "string"
+            ? { parentKey: owner.parentKey }
+            : {}),
+        }
       : undefined;
-  return checkpointNamespace?.split("|")[0];
-}
+  const normalizedStep =
+    typeof step?.name === "string" && !isInternalStepLabel(step.name)
+      ? {
+          ...(typeof step.id === "string" ? { id: step.id } : {}),
+          ...(typeof step.parentId === "string"
+            ? { parentId: step.parentId }
+            : {}),
+          ...(typeof step.kind === "string" ? { kind: step.kind } : {}),
+          name: step.name,
+        }
+      : undefined;
 
-function getTraceOwner(traceValue: AgUiTraceEvent) {
-  if (!("owner" in traceValue) || !isRecord(traceValue.owner)) {
-    return undefined;
-  }
-  const owner = traceValue.owner;
-  if (
-    typeof owner.key !== "string" ||
-    typeof owner.type !== "string" ||
-    typeof owner.instanceId !== "string"
-  ) {
-    return undefined;
-  }
+  if (!normalizedOwner && !normalizedStep) return undefined;
   return {
-    key: owner.key,
-    type: owner.type,
-    instanceId: owner.instanceId,
-    ...(typeof owner.parentKey === "string"
-      ? { parentKey: owner.parentKey }
-      : {}),
-  } satisfies ExecutionOwner;
+    ...(normalizedStep ? { step: normalizedStep } : {}),
+    ...(normalizedOwner ? { owner: normalizedOwner } : {}),
+  };
 }
 
-function getLogicalOwnerNodeId(owner?: ExecutionOwner): string | undefined {
-  if (owner?.type && owner.instanceId) {
-    return `${owner.type}:${owner.instanceId}`;
-  }
-  return owner?.instanceId || owner?.key;
+function getVisualizationStep(value: {
+  step?: ExecutionStep;
+  extra?: Record<string, unknown>;
+}): ExecutionStep | undefined {
+  return getVisualizationPayload(value)?.step ?? value.step;
 }
 
-function getLogicalOwnerNodeIdFromKey(ownerKey?: string): string | undefined {
-  if (!ownerKey) return undefined;
-  const segments = ownerKey.split(":");
-  return segments.length >= 3 ? segments.slice(1).join(":") : ownerKey;
-}
-
-function getLogicalTraceOwnerId(
-  traceValue: AgUiTraceEvent,
-): string | undefined {
-  const owner = getTraceOwner(traceValue);
-  return getLogicalOwnerNodeId(owner);
-}
-
-function getLogicalTraceParentOwnerId(
-  traceValue: AgUiTraceEvent,
-): string | undefined {
-  const owner = getTraceOwner(traceValue);
-  return owner?.parentKey
-    ? getLogicalOwnerNodeIdFromKey(owner.parentKey)
-    : undefined;
-}
-
-function hasCanonicalTrace(traceEvents: TraceEvent[]) {
-  return traceEvents.some((event) => getCanonicalTraceValue(event) !== null);
+function getVisualizationOwner(value: {
+  extra?: Record<string, unknown>;
+}): VisualizationOwner | undefined {
+  return getVisualizationPayload(value)?.owner;
 }
 
 function normalizeStepName(stepName?: string): string | undefined {
-  return stepName && stepName.trim() ? stepName : undefined;
+  return stepName && stepName.trim() && !isInternalStepLabel(stepName)
+    ? stepName
+    : undefined;
 }
 
 function normalizeStepId(
@@ -235,6 +211,14 @@ export function isSupervisorWrapUpText(content: string): boolean {
   );
 }
 
+function resolveNodeStepName(opts: {
+  stepName?: string;
+  ownerType?: string;
+  stepId: string;
+}): string {
+  return normalizeStepName(opts.stepName) ?? opts.ownerType ?? opts.stepId;
+}
+
 function isAgentStep(opts: {
   stepId?: string;
   parentStepId?: string;
@@ -243,6 +227,7 @@ function isAgentStep(opts: {
   parentStepName?: string;
 }): boolean {
   return Boolean(
+    opts.stepKind === "agent" ||
     opts.stepKind === "supervisor" ||
     opts.stepKind === "subagent" ||
     opts.parentStepId ||
@@ -258,6 +243,7 @@ function hasStructuredAgentIdentity(opts: {
   parentStepName?: string;
 }): boolean {
   return Boolean(
+    opts.stepKind === "agent" ||
     opts.stepKind === "supervisor" ||
     opts.stepKind === "subagent" ||
     opts.parentStepId ||
@@ -378,15 +364,14 @@ function collectToolCalls(messages: ChatMessage[]) {
 export function getTraceMode(
   messages: ChatMessage[],
   activeSteps: ActiveStep[],
-  traceEvents: TraceEvent[] = [],
+  events: AgentEventRecord[] = [],
 ): TraceMode {
   const toolCalls = collectToolCalls(messages);
   const hasToolActivity =
     toolCalls.length > 0 || messages.some((message) => message.role === "tool");
   const hasStructuredAgentTrace =
-    hasCanonicalTrace(traceEvents) ||
-    traceEvents.some((event) => {
-      const step = event.step;
+    events.some((event) => {
+      const step = getVisualizationStep(event);
       return hasStructuredAgentIdentity({
         stepId: step?.id,
         parentStepId: step?.parentId,
@@ -395,7 +380,7 @@ export function getTraceMode(
       });
     }) ||
     messages.some((message) => {
-      const step = message.step;
+      const step = getVisualizationStep(message);
       return hasStructuredAgentIdentity({
         stepId: step?.id,
         parentStepId: step?.parentId,
@@ -403,12 +388,23 @@ export function getTraceMode(
         stepName: step?.name,
       });
     }) ||
+    messages.some((message) =>
+      (message.toolCalls ?? []).some((toolCall) => {
+        const step = getVisualizationStep(toolCall);
+        return hasStructuredAgentIdentity({
+          stepId: step?.id,
+          parentStepId: step?.parentId,
+          stepKind: step?.kind,
+          stepName: step?.name,
+        });
+      }),
+    ) ||
     activeSteps.some((activeStep) =>
       hasStructuredAgentIdentity({
-        stepId: activeStep.step?.id,
-        parentStepId: activeStep.step?.parentId,
-        stepKind: activeStep.step?.kind,
-        stepName: activeStep.stepName,
+        stepId: getVisualizationStep(activeStep)?.id,
+        parentStepId: getVisualizationStep(activeStep)?.parentId,
+        stepKind: getVisualizationStep(activeStep)?.kind,
+        stepName: getVisualizationStep(activeStep)?.name ?? activeStep.stepName,
       }),
     );
 
@@ -426,9 +422,9 @@ export function getTraceMode(
 export function buildTurnPresentation(
   messages: ChatMessage[],
   activeSteps: ActiveStep[],
-  traceEvents: TraceEvent[] = [],
+  events: AgentEventRecord[] = [],
 ): TurnPresentation {
-  const traceMode = getTraceMode(messages, activeSteps, traceEvents);
+  const traceMode = getTraceMode(messages, activeSteps, events);
   const assistantMessages = collectAssistantMessages(messages);
 
   return {
@@ -441,11 +437,12 @@ export function getMessageSourceLabel(
   message: ChatMessage,
 ): string | undefined {
   if (message.role !== "assistant") return undefined;
-  const stepName = normalizeStepName(message.step?.name);
+  const step = getVisualizationStep(message);
+  const stepName = normalizeStepName(step?.name);
   if (
     !stepName ||
     stepName === "supervisor" ||
-    !(message.step?.kind === "subagent" || message.step?.parentId)
+    !(step?.kind === "subagent" || step?.parentId)
   ) {
     return undefined;
   }
@@ -497,7 +494,7 @@ function ensureTraceNode(
   parentStepId?: string,
   parentStepName?: string,
   order?: number,
-  owner?: ExecutionOwner,
+  owner?: VisualizationOwner,
 ) {
   const existing = nodes[stepId];
   if (existing) {
@@ -586,45 +583,56 @@ function linkParent(
   }
 }
 
+function linkKnownParents(nodes: Record<string, AgentTraceNode>) {
+  for (const node of Object.values(nodes)) {
+    const parentStepId = node.parentStepId;
+    if (!parentStepId) continue;
+    const parent = nodes[parentStepId];
+    if (!parent) continue;
+
+    node.parentStepName ||= parent.stepName;
+    linkParent(nodes, parentStepId, node.stepId);
+  }
+}
+
 function collectStepIdsFromMessages(messages: ChatMessage[]) {
   const stepIds = new Set<string>();
 
   for (const message of messages) {
-    const stepId = normalizeStepId(message.step?.id, message.step?.name);
+    const messageStep = getVisualizationStep(message);
+    const stepId = normalizeStepId(messageStep?.id, messageStep?.name);
     if (stepId) stepIds.add(stepId);
-    if (message.step?.parentId) stepIds.add(message.step.parentId);
+    if (messageStep?.parentId) stepIds.add(messageStep.parentId);
     for (const toolCall of message.toolCalls ?? []) {
-      const toolStepId = normalizeStepId(
-        toolCall.step?.id,
-        toolCall.step?.name,
-      );
+      const toolStep = getVisualizationStep(toolCall);
+      const toolStepId = normalizeStepId(toolStep?.id, toolStep?.name);
       if (toolStepId) stepIds.add(toolStepId);
-      if (toolCall.step?.parentId) stepIds.add(toolCall.step.parentId);
+      if (toolStep?.parentId) stepIds.add(toolStep.parentId);
     }
   }
 
   return stepIds;
 }
 
-export function filterTraceEventsForTurn(
-  traceEvents: TraceEvent[],
+export function filterEventsForTurn(
+  events: AgentEventRecord[],
   messages: ChatMessage[],
-  includeUnlinkedCanonicalTrace = false,
-): TraceEvent[] {
-  if (traceEvents.length === 0) return [];
+  includeUnlinkedEvents = false,
+): AgentEventRecord[] {
+  if (events.length === 0) return [];
 
-  if (includeUnlinkedCanonicalTrace && messages.length === 0) {
-    const lastRunStartIndex = traceEvents.reduce(
+  if (includeUnlinkedEvents && messages.length === 0) {
+    const lastRunStartIndex = events.reduce(
       (latest, event, index) => (event.type === "RUN_STARTED" ? index : latest),
       -1,
     );
-    return traceEvents
+    return events
       .slice(lastRunStartIndex + 1)
       .filter(
         (event) =>
           event.type !== "RUN_STARTED" &&
           event.type !== "RUN_FINISHED" &&
-          getCanonicalTraceValue(event) !== null,
+          Boolean(getVisualizationPayload(event)),
       );
   }
 
@@ -638,27 +646,9 @@ export function filterTraceEventsForTurn(
   const stepIds = collectStepIdsFromMessages(messages);
   const selected = new Set<number>();
 
-  for (let index = 0; index < traceEvents.length; index++) {
-    const event = traceEvents[index]!;
-    const traceValue = getCanonicalTraceValue(event);
-
-    if (
-      traceValue?.type === "message.link" &&
-      messageIds.has(traceValue.messageId)
-    ) {
-      selected.add(index);
-      stepIds.add(traceValue.spanId);
-      continue;
-    }
-
-    if (
-      traceValue?.type === "tool.link" &&
-      toolCallIds.has(traceValue.toolCallId)
-    ) {
-      selected.add(index);
-      stepIds.add(traceValue.spanId);
-      continue;
-    }
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index]!;
+    const step = getVisualizationStep(event);
 
     if (
       (event.messageId && messageIds.has(event.messageId)) ||
@@ -666,46 +656,26 @@ export function filterTraceEventsForTurn(
       (event.toolCallId && toolCallIds.has(event.toolCallId))
     ) {
       selected.add(index);
-      if (event.step?.id) stepIds.add(event.step.id);
-      if (event.step?.parentId) stepIds.add(event.step.parentId);
+      if (step?.id) stepIds.add(step.id);
+      if (step?.parentId) stepIds.add(step.parentId);
     }
   }
 
   let changed = true;
   while (changed) {
     changed = false;
-    for (let index = 0; index < traceEvents.length; index++) {
+    for (let index = 0; index < events.length; index++) {
       if (selected.has(index)) continue;
-      const event = traceEvents[index]!;
-      const traceValue = getCanonicalTraceValue(event);
-      const traceStepId =
-        traceValue?.type === "span.start" ||
-        traceValue?.type === "span.end" ||
-        traceValue?.type === "message.link" ||
-        traceValue?.type === "tool.link"
-          ? traceValue.spanId
-          : undefined;
-      const traceParentStepId =
-        traceValue?.type === "span.start" ? traceValue.parentSpanId : undefined;
+      const event = events[index]!;
+      const step = getVisualizationStep(event);
 
       if (
-        (traceStepId && stepIds.has(traceStepId)) ||
-        (traceParentStepId && stepIds.has(traceParentStepId))
+        (step?.id && stepIds.has(step.id)) ||
+        (step?.parentId && stepIds.has(step.parentId))
       ) {
         selected.add(index);
-        if (traceStepId) stepIds.add(traceStepId);
-        if (traceParentStepId) stepIds.add(traceParentStepId);
-        changed = true;
-        continue;
-      }
-
-      if (
-        (event.step?.id && stepIds.has(event.step.id)) ||
-        (event.step?.parentId && stepIds.has(event.step.parentId))
-      ) {
-        selected.add(index);
-        if (event.step?.id) stepIds.add(event.step.id);
-        if (event.step?.parentId) stepIds.add(event.step.parentId);
+        if (step?.id) stepIds.add(step.id);
+        if (step?.parentId) stepIds.add(step.parentId);
         changed = true;
       }
     }
@@ -713,7 +683,7 @@ export function filterTraceEventsForTurn(
 
   return [...selected]
     .sort((left, right) => left - right)
-    .map((index) => traceEvents[index]!)
+    .map((index) => events[index]!)
     .filter(
       (event) => event.type !== "RUN_STARTED" && event.type !== "RUN_FINISHED",
     );
@@ -722,12 +692,13 @@ export function filterTraceEventsForTurn(
 function buildStructuredAgentTraceData(
   messages: ChatMessage[],
   activeSteps: ActiveStep[],
-  traceEvents: TraceEvent[],
+  events: AgentEventRecord[],
 ): AgentTraceData | null {
   const nodes: Record<string, AgentTraceNode> = {};
 
-  for (const [eventIndex, event] of traceEvents.entries()) {
-    const step = event.step;
+  for (const [eventIndex, event] of events.entries()) {
+    const step = getVisualizationStep(event);
+    const owner = getVisualizationOwner(event);
     const stepId = normalizeStepId(step?.id, step?.name);
     const parentStepId = normalizeStepId(step?.parentId);
     if (
@@ -745,30 +716,23 @@ function buildStructuredAgentTraceData(
     ensureTraceNode(
       nodes,
       stepId,
-      step?.name ?? stepId,
+      resolveNodeStepName({
+        stepName: step?.name,
+        ownerType: owner?.type,
+        stepId,
+      }),
       step?.kind,
       parentStepId,
       parentStepId ? nodes[parentStepId]?.stepName : undefined,
       eventIndex,
+      owner,
     );
-
-    if (parentStepId) {
-      ensureTraceNode(
-        nodes,
-        parentStepId,
-        parentStepId,
-        step?.parentId ? undefined : "supervisor",
-        undefined,
-        undefined,
-        eventIndex,
-      );
-      linkParent(nodes, parentStepId, stepId);
-    }
   }
 
-  const activeStepOrderOffset = traceEvents.length;
+  const activeStepOrderOffset = events.length;
   for (const [stepIndex, step] of activeSteps.entries()) {
-    const stepRef = step.step;
+    const stepRef = getVisualizationStep(step);
+    const owner = getVisualizationOwner(step);
     const stepId = normalizeStepId(stepRef?.id, step.stepName);
     const parentStepId = normalizeStepId(stepRef?.parentId);
     if (
@@ -786,48 +750,48 @@ function buildStructuredAgentTraceData(
     ensureTraceNode(
       nodes,
       stepId,
-      step.stepName,
+      resolveNodeStepName({
+        stepName: stepRef?.name ?? step.stepName,
+        ownerType: owner?.type,
+        stepId,
+      }),
       stepRef?.kind,
       parentStepId,
       parentStepId ? nodes[parentStepId]?.stepName : undefined,
       activeStepOrderOffset + stepIndex,
+      owner,
     );
-    if (parentStepId) {
-      ensureTraceNode(
-        nodes,
-        parentStepId,
-        parentStepId,
-        "supervisor",
-        undefined,
-        undefined,
-        activeStepOrderOffset + stepIndex,
-      );
-      linkParent(nodes, parentStepId, stepId);
-    }
   }
 
   for (const [messageIndex, message] of messages.entries()) {
-    const resolvedStepId = message.step?.id;
-    const resolvedParentStepId = message.step?.parentId;
+    const messageStep = getVisualizationStep(message);
+    const messageOwner = getVisualizationOwner(message);
+    const resolvedStepId = messageStep?.id;
+    const resolvedParentStepId = messageStep?.parentId;
     if (
       resolvedStepId &&
       hasStructuredAgentIdentity({
-        stepId: message.step?.id,
-        parentStepId: message.step?.parentId,
-        stepKind: message.step?.kind,
-        stepName: message.step?.name,
+        stepId: messageStep?.id,
+        parentStepId: messageStep?.parentId,
+        stepKind: messageStep?.kind,
+        stepName: messageStep?.name,
       })
     ) {
       const node = ensureTraceNode(
         nodes,
         resolvedStepId,
-        message.step?.name ?? resolvedStepId,
-        message.step?.kind,
+        resolveNodeStepName({
+          stepName: messageStep?.name,
+          ownerType: messageOwner?.type,
+          stepId: resolvedStepId,
+        }),
+        messageStep?.kind,
         resolvedParentStepId,
         resolvedParentStepId
           ? nodes[resolvedParentStepId]?.stepName
           : undefined,
         messageIndex,
+        messageOwner,
       );
       node.messages.push(message);
       node.messageOrders[message.id] = messageIndex;
@@ -838,290 +802,45 @@ function buildStructuredAgentTraceData(
         }
       }
       if (resolvedParentStepId) {
-        ensureTraceNode(
-          nodes,
-          resolvedParentStepId,
-          resolvedParentStepId,
-          "supervisor",
-          undefined,
-          undefined,
-          messageIndex,
-        );
-        linkParent(nodes, resolvedParentStepId, resolvedStepId);
         pushChildRenderItem(nodes, resolvedParentStepId, resolvedStepId);
       }
     }
-  }
-
-  if (Object.keys(nodes).length === 0) {
-    return null;
-  }
-
-  const roots = Object.values(nodes)
-    .filter((node) => !node.parentStepId || !nodes[node.parentStepId])
-    .sort((left, right) => {
-      const orderDelta = getNodeOrder(left) - getNodeOrder(right);
-      if (orderDelta !== 0) return orderDelta;
-      if (left.stepName === "supervisor" && right.stepName !== "supervisor") {
-        return -1;
-      }
-      if (right.stepName === "supervisor" && left.stepName !== "supervisor") {
-        return 1;
-      }
-      return left.stepName.localeCompare(right.stepName);
-    })
-    .map((node) => node.stepId);
-
-  return { roots, nodes };
-}
-
-function buildCanonicalAgentTraceData(
-  messages: ChatMessage[],
-  traceEvents: TraceEvent[],
-): AgentTraceData | null {
-  const nodes: Record<string, AgentTraceNode> = {};
-  const spanAliases = new Map<string, string>();
-  const logicalSpanIds = new Map<string, string>();
-  const messageSpanIds = new Map<string, string>();
-  const toolSpanIds = new Map<
-    string,
-    {
-      spanId: string;
-      traceOrder: number;
-      toolCallName?: string;
-      parentMessageId?: string;
-    }
-  >();
-
-  const resolveSpanId = (spanId: string) => spanAliases.get(spanId) ?? spanId;
-
-  for (const [eventIndex, event] of traceEvents.entries()) {
-    const traceValue = getCanonicalTraceValue(event);
-    if (!traceValue) continue;
-
-    if (traceValue.type === "span.start") {
-      const traceOwner = getTraceOwner(traceValue);
-      const namespaceRoot = getCheckpointNamespaceRoot(traceValue);
-      const resolvedParentSpanId = traceValue.parentSpanId
-        ? resolveSpanId(traceValue.parentSpanId)
-        : undefined;
-      let spanId: string;
-      let parentSpanId: string | undefined;
-      let stepName = traceValue.name;
-      let ownerMeta: ExecutionOwner | undefined;
-
-      const logicalOwnerId = getLogicalTraceOwnerId(traceValue);
-      const logicalParentOwnerId = getLogicalTraceParentOwnerId(traceValue);
-
-      if (traceOwner?.key && logicalOwnerId) {
-        spanId = logicalOwnerId;
-        parentSpanId = logicalParentOwnerId ?? resolvedParentSpanId;
-        stepName = traceOwner.type;
-        ownerMeta = traceOwner;
-        spanAliases.set(traceValue.spanId, spanId);
-      } else {
-        const logicalSpanKey =
-          namespaceRoot &&
-          !(traceValue.kind === "supervisor" && !resolvedParentSpanId)
-            ? [
-                traceValue.kind,
-                traceValue.name,
-                resolvedParentSpanId ?? "root",
-                namespaceRoot,
-              ].join("|")
-            : undefined;
-        const existingSupervisorRoot =
-          traceValue.kind === "supervisor" && !resolvedParentSpanId
-            ? Object.values(nodes).find(
-                (node) =>
-                  node.stepKind === "supervisor" &&
-                  !node.parentStepId &&
-                  node.stepName === traceValue.name,
-              )
-            : undefined;
-        const existingLogicalSpanId = logicalSpanKey
-          ? logicalSpanIds.get(logicalSpanKey)
-          : undefined;
-        spanId =
-          existingSupervisorRoot?.stepId ??
-          existingLogicalSpanId ??
-          traceValue.spanId;
-        if (existingSupervisorRoot) {
-          spanAliases.set(traceValue.spanId, existingSupervisorRoot.stepId);
-        }
-        if (existingLogicalSpanId) {
-          spanAliases.set(traceValue.spanId, existingLogicalSpanId);
-        }
-        if (logicalSpanKey && !existingLogicalSpanId) {
-          logicalSpanIds.set(logicalSpanKey, spanId);
-        }
-        parentSpanId = resolvedParentSpanId;
-      }
-      const node = ensureTraceNode(
-        nodes,
-        spanId,
-        stepName,
-        traceValue.kind,
-        parentSpanId,
-        parentSpanId ? nodes[parentSpanId]?.stepName : undefined,
-        eventIndex,
-        ownerMeta,
-      );
-      node.active = true;
-
-      if (parentSpanId) {
-        ensureTraceNode(
-          nodes,
-          parentSpanId,
-          parentSpanId,
-          undefined,
-          undefined,
-          undefined,
-          eventIndex,
-        );
-        linkParent(nodes, parentSpanId, spanId);
-      }
-    }
-
-    if (traceValue.type === "span.end") {
-      const node = nodes[resolveSpanId(traceValue.spanId)];
-      if (node) node.active = false;
-    }
-
-    if (traceValue.type === "message.link") {
-      messageSpanIds.set(
-        traceValue.messageId,
-        getLogicalTraceOwnerId(traceValue) ?? resolveSpanId(traceValue.spanId),
-      );
-    }
-
-    if (traceValue.type === "tool.link") {
-      toolSpanIds.set(traceValue.toolCallId, {
-        spanId:
-          getLogicalTraceOwnerId(traceValue) ??
-          resolveSpanId(traceValue.spanId),
-        traceOrder: eventIndex,
-        ...(traceValue.toolCallName
-          ? { toolCallName: traceValue.toolCallName }
-          : {}),
-        ...(traceValue.parentMessageId
-          ? { parentMessageId: traceValue.parentMessageId }
-          : {}),
-      });
-      if (
-        traceValue.parentMessageId &&
-        !messageSpanIds.has(traceValue.parentMessageId)
-      ) {
-        messageSpanIds.set(
-          traceValue.parentMessageId,
-          getLogicalTraceOwnerId(traceValue) ??
-            resolveSpanId(traceValue.spanId),
-        );
-      }
-    }
-  }
-
-  for (const [messageIndex, message] of messages.entries()) {
-    let spanId =
-      getLogicalOwnerNodeId(message.owner) ?? messageSpanIds.get(message.id);
-    if (!spanId && message.role === "assistant") {
-      spanId = (message.toolCalls ?? [])
-        .map(
-          (toolCall) =>
-            getLogicalOwnerNodeId(toolCall.owner) ??
-            toolSpanIds.get(toolCall.id)?.spanId,
-        )
-        .find((item): item is string => Boolean(item));
-    }
-    if (!spanId && message.role === "tool" && message.toolCallId) {
-      spanId =
-        getLogicalOwnerNodeId(message.owner) ??
-        toolSpanIds.get(message.toolCallId)?.spanId;
-    }
-
-    if (spanId && nodes[spanId]) {
-      const node = nodes[spanId]!;
-      node.owner ||= message.owner;
-      node.messages.push(message);
-      node.messageOrders[message.id] = messageIndex;
-      if (node.order === undefined || messageIndex < node.order) {
-        node.order = messageIndex;
-      }
-      if (message.role === "tool" && message.toolCallId) {
-        pushTraceRenderItem(node, {
-          type: "tool",
-          toolCallId: message.toolCallId,
-        });
-      } else {
-        pushTraceRenderItem(node, { type: "message", messageId: message.id });
-      }
-      pushChildRenderItem(nodes, node.parentStepId, node.stepId);
-    }
 
     for (const toolCall of message.toolCalls ?? []) {
-      const logicalToolOwnerId = getLogicalOwnerNodeId(toolCall.owner);
-      const owner = logicalToolOwnerId
-        ? {
-            spanId: logicalToolOwnerId,
-            traceOrder: messageIndex,
-            toolCallName: toolCall.function.name,
-          }
-        : toolSpanIds.get(toolCall.id);
-      const ownerNode = owner ? nodes[owner.spanId] : undefined;
-      if (
-        ownerNode &&
-        !ownerNode.toolCalls.some((item) => item.id === toolCall.id)
-      ) {
-        ownerNode.toolCalls.push({
-          ...toolCall,
-          ...(toolCall.owner || ownerNode.owner
-            ? { owner: toolCall.owner ?? ownerNode.owner }
-            : {}),
-        });
+      const toolStep = getVisualizationStep(toolCall);
+      const toolOwner = getVisualizationOwner(toolCall);
+      const toolStepId = normalizeStepId(toolStep?.id, toolStep?.name);
+      const parentStepId = normalizeStepId(toolStep?.parentId);
+      if (!toolStepId) continue;
+      const node = ensureTraceNode(
+        nodes,
+        toolStepId,
+        resolveNodeStepName({
+          stepName: toolStep?.name,
+          ownerType: toolOwner?.type,
+          stepId: toolStepId,
+        }),
+        toolStep?.kind,
+        parentStepId,
+        parentStepId ? nodes[parentStepId]?.stepName : undefined,
+        messageIndex,
+        toolOwner,
+      );
+      if (!node.toolCalls.some((item) => item.id === toolCall.id)) {
+        node.toolCalls.push(toolCall);
       }
-      if (ownerNode) {
-        ownerNode.toolOrders[toolCall.id] =
-          nodes[spanId ?? ""]?.messageOrders[message.id] ?? messageIndex + 0.01;
+      node.toolOrders[toolCall.id] = messageIndex + 0.01;
+      if (parentStepId) {
+        pushChildRenderItem(nodes, parentStepId, toolStepId);
       }
-    }
-  }
-
-  for (const [toolCallId, owner] of toolSpanIds) {
-    const node = nodes[owner.spanId];
-    if (
-      !node ||
-      node.toolCalls.some((toolCall) => toolCall.id === toolCallId)
-    ) {
-      continue;
-    }
-
-    const resultMessage = messages.find(
-      (message) => message.role === "tool" && message.toolCallId === toolCallId,
-    );
-    const resultMessageIndex = resultMessage
-      ? messages.indexOf(resultMessage)
-      : -1;
-
-    node.toolCalls.push({
-      id: toolCallId,
-      type: "function",
-      function: {
-        name: owner.toolCallName ?? "tool_result",
-        arguments: "",
-      },
-      complete: Boolean(resultMessage),
-      ...(node.owner ? { owner: node.owner } : {}),
-    });
-    node.toolOrders[toolCallId] =
-      resultMessageIndex >= 0 ? resultMessageIndex : owner.traceOrder;
-    if (resultMessageIndex < 0) {
-      pushTraceRenderItem(node, { type: "tool", toolCallId });
     }
   }
 
   if (Object.keys(nodes).length === 0) {
     return null;
   }
+
+  linkKnownParents(nodes);
 
   const roots = Object.values(nodes)
     .filter((node) => !node.parentStepId || !nodes[node.parentStepId])
@@ -1144,13 +863,10 @@ function buildCanonicalAgentTraceData(
 export function buildAgentTraceData(
   messages: ChatMessage[],
   activeSteps: ActiveStep[],
-  traceEvents: TraceEvent[] = [],
+  events: AgentEventRecord[] = [],
 ): AgentTraceData | null {
-  if (getTraceMode(messages, activeSteps, traceEvents) !== "agent") {
+  if (getTraceMode(messages, activeSteps, events) !== "agent") {
     return null;
   }
-  if (hasCanonicalTrace(traceEvents)) {
-    return buildCanonicalAgentTraceData(messages, traceEvents);
-  }
-  return buildStructuredAgentTraceData(messages, activeSteps, traceEvents);
+  return buildStructuredAgentTraceData(messages, activeSteps, events);
 }

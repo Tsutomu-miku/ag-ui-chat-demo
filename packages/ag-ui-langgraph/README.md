@@ -37,6 +37,7 @@ interface LangGraphAgentConfig {
   graph: LocalCompiledGraph;
   description?: string;
   config?: Record<string, unknown>;
+  eventExtensions?: LangGraphEventExtension[];
 }
 ```
 
@@ -61,29 +62,35 @@ Convenience factories are also exported:
 | reasoning content blocks | `REASONING_*` events |
 | every LangGraph event | `RAW` event with JSON-safe payload |
 
-## Canonical Trace Events
+## Event Extensions
 
-Sub-agent hierarchy is emitted as standard AG-UI custom events:
+`ag-ui-langgraph` does not assign business ownership, agent identity, or
+visualization semantics. Use event extensions to add application-defined
+metadata to standard AG-UI events before they are yielded or encoded:
 
 ```ts
-{
-  type: "CUSTOM",
-  name: "ag-ui.trace",
-  value: {
-    version: 1,
-    type: "span.start",
-    spanId: "run-1:writer:1",
-    name: "writer",
-    kind: "subagent",
-    parentSpanId: "run-1:supervisor:1"
-  }
-}
+import { mergeEventExtra, type LangGraphEventExtension } from "ag-ui-langgraph";
+
+const visualization: LangGraphEventExtension = {
+  name: "my-app.visualization",
+  beforeDispatchEvent(event, context) {
+    mergeEventExtra(event, {
+      visualization: {
+        node: context.langgraph.nodeName,
+      },
+    });
+  },
+};
+
+const agent = new LangGraphAgent({
+  name: "assistant",
+  graph,
+  eventExtensions: [visualization],
+});
 ```
 
-Trace payload types are `span.start`, `span.end`, `message.link`, and
-`tool.link`. Normal AG-UI `TEXT_MESSAGE_*`, `TOOL_CALL_*`, and `STEP_*` events
-remain protocol-compatible; clients should use `CUSTOM name="ag-ui.trace"` as
-the canonical source for parent-child trace rendering.
+`mergeEventExtra(event, extra)` performs only a shallow merge into
+`event.extra`; the package does not interpret keys inside `extra`.
 
 ## Python Alignment Notes
 

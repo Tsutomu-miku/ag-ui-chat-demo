@@ -9,6 +9,8 @@
 
 // ── Tool call within a chat message ──
 
+export type EventExtra = Record<string, unknown>;
+
 export interface ExecutionStep {
   id?: string;
   parentId?: string;
@@ -16,16 +18,9 @@ export interface ExecutionStep {
   name?: string;
 }
 
-export interface ExecutionOwner {
-  key: string;
-  type: string;
-  instanceId: string;
-  parentKey?: string;
-}
-
 export interface ExecutionContext {
   step?: ExecutionStep;
-  owner?: ExecutionOwner;
+  extra?: EventExtra;
 }
 
 export interface ToolCallFunction extends ExecutionContext {
@@ -58,7 +53,7 @@ export interface ChatMessage extends ExecutionContext {
   createdAt: string;
 }
 
-export interface TraceEvent {
+export interface AgentEventRecord {
   type: string;
   sequence?: number;
   createdAt?: string;
@@ -73,56 +68,9 @@ export interface TraceEvent {
   toolCallId?: string;
   toolCallName?: string;
   step?: ExecutionStep;
-  owner?: ExecutionOwner;
+  stepName?: string;
+  extra?: EventExtra;
 }
-
-export const AG_UI_TRACE_EVENT_NAME = "ag-ui.trace";
-export const AG_UI_TRACE_PROTOCOL_VERSION = 2;
-
-export type AgUiTraceOwner = {
-  key: string;
-  type: string;
-  instanceId: string;
-  parentKey?: string;
-};
-
-export type AgUiTraceEvent =
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "span.start";
-      spanId: string;
-      name: string;
-      kind: string;
-      parentSpanId?: string;
-      owner?: AgUiTraceOwner;
-      source?: Record<string, unknown>;
-    }
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "span.end";
-      spanId: string;
-      owner?: AgUiTraceOwner;
-      source?: Record<string, unknown>;
-    }
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "message.link";
-      messageId: string;
-      spanId: string;
-      role?: string;
-      owner?: AgUiTraceOwner;
-      source?: Record<string, unknown>;
-    }
-  | {
-      version?: typeof AG_UI_TRACE_PROTOCOL_VERSION;
-      type: "tool.link";
-      toolCallId: string;
-      spanId: string;
-      toolCallName?: string;
-      parentMessageId?: string;
-      owner?: AgUiTraceOwner;
-      source?: Record<string, unknown>;
-    };
 
 // ── Thread (conversation) ──
 
@@ -130,7 +78,7 @@ export interface ChatThread {
   id: string;
   title: string;
   messages: ChatMessage[];
-  traceEvents?: TraceEvent[];
+  events?: AgentEventRecord[];
   createdAt: string;
   updatedAt: string;
 }
@@ -158,7 +106,7 @@ export interface PendingToolCall {
   args: Record<string, unknown>;
   status: "pending" | "approved" | "rejected";
   step?: ExecutionStep;
-  owner?: ExecutionOwner;
+  extra?: EventExtra;
   result?: string;
 }
 
@@ -183,16 +131,18 @@ export type ThreadAgentEvent =
       type: "assistant_start";
       messageId: string;
       step?: ExecutionStep;
-      owner?: ExecutionOwner;
+      extra?: EventExtra;
     }
   | {
       type: "assistant_delta";
       messageId: string;
       delta: string;
+      extra?: EventExtra;
     }
   | {
       type: "assistant_end";
       messageId: string;
+      extra?: EventExtra;
     }
   | {
       type: "tool_start";
@@ -200,65 +150,67 @@ export type ThreadAgentEvent =
       toolCallId: string;
       toolCallName: string;
       step?: ExecutionStep;
-      owner?: ExecutionOwner;
+      extra?: EventExtra;
     }
   | {
       type: "tool_args";
       toolCallId: string;
       delta: string;
+      extra?: EventExtra;
     }
   | {
       type: "tool_end";
       toolCallId: string;
+      extra?: EventExtra;
     }
   | {
       type: "tool_result_start";
       messageId: string;
       toolCallId: string;
       step?: ExecutionStep;
-      owner?: ExecutionOwner;
+      extra?: EventExtra;
     }
   | {
       type: "tool_result_delta";
       messageId: string;
       toolCallId: string;
       delta: string;
+      extra?: EventExtra;
     }
   | {
       type: "tool_result_end";
       messageId: string;
       toolCallId: string;
+      extra?: EventExtra;
     }
   | {
       type: "step_started";
       step: ExecutionStep & { name: string };
-      owner?: ExecutionOwner;
+      extra?: EventExtra;
     }
   | {
       type: "reasoning_start";
       messageId: string;
       step?: ExecutionStep;
-      owner?: ExecutionOwner;
+      extra?: EventExtra;
     }
   | {
       type: "reasoning_delta";
       messageId: string;
       delta: string;
+      extra?: EventExtra;
     }
   | {
       type: "reasoning_end";
       messageId: string;
+      extra?: EventExtra;
     }
   | {
       type: "step_finished";
       step: ExecutionStep & { name: string };
-      owner?: ExecutionOwner;
+      extra?: EventExtra;
     }
   | {
       type: "run_complete";
-    }
-  | {
-      type: "trace_event";
-      name: string;
-      value: unknown;
+      extra?: EventExtra;
     };

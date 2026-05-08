@@ -11,10 +11,10 @@ import { useState, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
 import type {
   ActiveStep,
+  AgentEventRecord,
   ChatMessage,
   ChatThread,
   ExecutionContext,
-  TraceEvent,
   ThreadAgentEvent,
   ThreadSummary,
 } from "./types.js";
@@ -34,22 +34,21 @@ function shouldFlushStreamingEvent(event: ThreadAgentEvent) {
     event.type === "tool_end" ||
     event.type === "tool_result_start" ||
     event.type === "tool_result_delta" ||
-    event.type === "tool_result_end" ||
-    event.type === "trace_event"
+    event.type === "tool_result_end"
   );
 }
 
 function getEventContext(event: Partial<ExecutionContext>) {
   return {
     ...(event.step ? { step: event.step } : {}),
-    ...(event.owner ? { owner: event.owner } : {}),
+    ...(event.extra ? { extra: event.extra } : {}),
   };
 }
 
-function toTraceEvent(
+function toAgentEventRecord(
   event: ThreadAgentEvent,
   sequence: number,
-): TraceEvent | null {
+): AgentEventRecord | null {
   const base = {
     sequence,
     createdAt: now(),
@@ -70,12 +69,14 @@ function toTraceEvent(
         type: "TEXT_MESSAGE_CONTENT",
         messageId: event.messageId,
         delta: event.delta,
+        ...getEventContext(event),
       };
     case "assistant_end":
       return {
         ...base,
         type: "TEXT_MESSAGE_END",
         messageId: event.messageId,
+        ...getEventContext(event),
       };
     case "tool_start":
       return {
@@ -92,12 +93,14 @@ function toTraceEvent(
         type: "TOOL_CALL_ARGS",
         toolCallId: event.toolCallId,
         delta: event.delta,
+        ...getEventContext(event),
       };
     case "tool_end":
       return {
         ...base,
         type: "TOOL_CALL_END",
         toolCallId: event.toolCallId,
+        ...getEventContext(event),
       };
     case "tool_result_start":
       return {
@@ -114,6 +117,7 @@ function toTraceEvent(
         messageId: event.messageId,
         toolCallId: event.toolCallId,
         delta: event.delta,
+        ...getEventContext(event),
       };
     case "tool_result_end":
       return {
@@ -121,12 +125,14 @@ function toTraceEvent(
         type: "TOOL_CALL_RESULT_END",
         messageId: event.messageId,
         toolCallId: event.toolCallId,
+        ...getEventContext(event),
       };
     case "step_started":
       return {
         ...base,
         type: "STEP_STARTED",
         step: event.step,
+        stepName: event.step.name,
         ...getEventContext(event),
       };
     case "step_finished":
@@ -134,6 +140,7 @@ function toTraceEvent(
         ...base,
         type: "STEP_FINISHED",
         step: event.step,
+        stepName: event.step.name,
         ...getEventContext(event),
       };
     case "reasoning_start":
@@ -149,12 +156,14 @@ function toTraceEvent(
         type: "REASONING_MESSAGE_CONTENT",
         messageId: event.messageId,
         delta: event.delta,
+        ...getEventContext(event),
       };
     case "reasoning_end":
       return {
         ...base,
         type: "REASONING_END",
         messageId: event.messageId,
+        ...getEventContext(event),
       };
     case "append_message":
       if (event.message.role !== "tool") return null;
@@ -170,13 +179,7 @@ function toTraceEvent(
       return {
         ...base,
         type: "RUN_FINISHED",
-      };
-    case "trace_event":
-      return {
-        ...base,
-        type: "CUSTOM",
-        name: event.name,
-        value: event.value,
+        ...getEventContext(event),
       };
   }
 }
@@ -333,7 +336,7 @@ export function useThreads({
       id: generateId(),
       title: "New Chat",
       messages: [],
-      traceEvents: [],
+      events: [],
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -368,7 +371,7 @@ export function useThreads({
               {
                 stepName: step.name,
                 step,
-                ...(event.owner ? { owner: event.owner } : {}),
+                ...(event.extra ? { extra: event.extra } : {}),
                 startedAt: now(),
               },
             ];
@@ -393,10 +396,10 @@ export function useThreads({
           return {
             ...thread,
             messages: updateMessagesWithAgentEvent(thread.messages, event),
-            traceEvents: (() => {
-              const existing = thread.traceEvents ?? [];
-              const traceEvent = toTraceEvent(event, existing.length);
-              return traceEvent ? [...existing, traceEvent] : existing;
+            events: (() => {
+              const existing = thread.events ?? [];
+              const eventRecord = toAgentEventRecord(event, existing.length);
+              return eventRecord ? [...existing, eventRecord] : existing;
             })(),
             updatedAt: now(),
           };
@@ -428,7 +431,7 @@ export function useThreads({
     (threadId: string, toolCallId: string, result: string) => {
       const existingToolMessage =
         active?.messages.find((message) => message.toolCallId === toolCallId) ?? null;
-      const owner =
+      const toolCall =
         active?.messages
           .flatMap((message) => message.toolCalls ?? [])
           .find((toolCall) => toolCall.id === toolCallId) ?? null;
@@ -437,8 +440,8 @@ export function useThreads({
         role: "tool",
         content: result,
         toolCallId,
-        ...(owner?.step ? { step: owner.step } : {}),
-        ...(owner?.owner ? { owner: owner.owner } : {}),
+        ...(toolCall?.step ? { step: toolCall.step } : {}),
+        ...(toolCall?.extra ? { extra: toolCall.extra } : {}),
         createdAt: now(),
       };
       handleThreadEvent(threadId, {

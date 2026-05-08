@@ -14,13 +14,12 @@ import type { AgentSubscriber } from "@ag-ui/client";
 import type {
   ChatMessage,
   ExecutionContext,
-  ExecutionOwner,
+  EventExtra,
   ExecutionStep,
   FrontendToolDefinition,
   PendingToolCall,
   ThreadAgentEvent,
 } from "./types.js";
-import { AG_UI_TRACE_EVENT_NAME } from "./types.js";
 
 const TOOL_RESULT_START_EVENT = "ag-ui.tool_result_start";
 const TOOL_RESULT_DELTA_EVENT = "ag-ui.tool_result_delta";
@@ -31,14 +30,14 @@ const TOOL_RESULT_END_EVENT = "ag-ui.tool_result_end";
 function getEventContext(event: unknown): ExecutionContext {
   const item = event as {
     step?: ExecutionStep;
-    owner?: ExecutionOwner;
+    extra?: EventExtra;
   };
   const step = item.step;
-  const owner = item.owner;
+  const extra = item.extra;
 
   return {
     ...(step ? { step } : {}),
-    ...(owner ? { owner } : {}),
+    ...(extra ? { extra } : {}),
   };
 }
 
@@ -70,6 +69,30 @@ function getToolResultEventPayload(event: unknown):
       ...root,
       ...value,
     }),
+  };
+}
+
+function getStepFromEvent(
+  event: unknown,
+): (ExecutionStep & { name: string }) | null {
+  const item = event as {
+    step?: ExecutionStep;
+    stepName?: string;
+  };
+  const name =
+    typeof item.step?.name === "string" && item.step.name
+      ? item.step.name
+      : typeof item.stepName === "string" && item.stepName
+        ? item.stepName
+        : null;
+
+  if (!name) return null;
+
+  return {
+    ...(item.step?.id ? { id: item.step.id } : {}),
+    ...(item.step?.parentId ? { parentId: item.step.parentId } : {}),
+    ...(item.step?.kind ? { kind: item.step.kind } : {}),
+    name,
   };
 }
 
@@ -192,7 +215,7 @@ export function useAgentChat({
         ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
         ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
         ...(m.step ? { step: m.step } : {}),
-        ...(m.owner ? { owner: m.owner } : {}),
+        ...(m.extra ? { extra: m.extra } : {}),
       })) as never[];
 
       const subscriber: AgentSubscriber = {
@@ -210,6 +233,7 @@ export function useAgentChat({
             type: "assistant_delta",
             messageId: event.messageId,
             delta: event.delta,
+            ...getEventContext(event),
           });
         },
 
@@ -217,6 +241,7 @@ export function useAgentChat({
           emitThreadEvent(threadId, {
             type: "assistant_end",
             messageId: event.messageId,
+            ...getEventContext(event),
           });
         },
 
@@ -243,6 +268,7 @@ export function useAgentChat({
             type: "tool_args",
             toolCallId: event.toolCallId,
             delta: event.delta,
+            ...getEventContext(event),
           });
         },
 
@@ -250,6 +276,7 @@ export function useAgentChat({
           emitThreadEvent(threadId, {
             type: "tool_end",
             toolCallId: event.toolCallId,
+            ...getEventContext(event),
           });
 
           if (frontendToolNames.has(toolCallName)) {
@@ -296,17 +323,9 @@ export function useAgentChat({
         },
 
         onStepStartedEvent: ({ event }) => {
-          const stepEvent = event as { step?: ExecutionStep };
-          if (!stepEvent.step?.name) return;
+          const step = getStepFromEvent(event);
+          if (!step) return;
           const { step: _ignoredStep, ...context } = getEventContext(event);
-          const step: ExecutionStep & { name: string } = {
-            ...(stepEvent.step?.id ? { id: stepEvent.step.id } : {}),
-            ...(stepEvent.step?.parentId
-              ? { parentId: stepEvent.step.parentId }
-              : {}),
-            ...(stepEvent.step?.kind ? { kind: stepEvent.step.kind } : {}),
-            name: stepEvent.step.name,
-          };
           emitThreadEvent(threadId, {
             type: "step_started",
             ...context,
@@ -338,6 +357,7 @@ export function useAgentChat({
             type: "reasoning_delta",
             messageId,
             delta,
+            ...getEventContext(event),
           });
         },
 
@@ -350,21 +370,14 @@ export function useAgentChat({
           emitThreadEvent(threadId, {
             type: "reasoning_end",
             messageId,
+            ...getEventContext(event),
           });
         },
 
         onStepFinishedEvent: ({ event }) => {
-          const stepEvent = event as { step?: ExecutionStep };
-          if (!stepEvent.step?.name) return;
+          const step = getStepFromEvent(event);
+          if (!step) return;
           const { step: _ignoredStep, ...context } = getEventContext(event);
-          const step: ExecutionStep & { name: string } = {
-            ...(stepEvent.step?.id ? { id: stepEvent.step.id } : {}),
-            ...(stepEvent.step?.parentId
-              ? { parentId: stepEvent.step.parentId }
-              : {}),
-            ...(stepEvent.step?.kind ? { kind: stepEvent.step.kind } : {}),
-            name: stepEvent.step.name,
-          };
           emitThreadEvent(threadId, {
             type: "step_finished",
             ...context,
@@ -381,7 +394,7 @@ export function useAgentChat({
               messageId: payload.messageId,
               toolCallId: payload.toolCallId,
               ...(payload.step ? { step: payload.step } : {}),
-              ...(payload.owner ? { owner: payload.owner } : {}),
+              ...(payload.extra ? { extra: payload.extra } : {}),
             });
             return;
           }
@@ -395,6 +408,7 @@ export function useAgentChat({
               messageId: payload.messageId,
               toolCallId: payload.toolCallId,
               delta: payload.delta,
+              ...(payload.extra ? { extra: payload.extra } : {}),
             });
             return;
           }
@@ -406,16 +420,12 @@ export function useAgentChat({
               type: "tool_result_end",
               messageId: payload.messageId,
               toolCallId: payload.toolCallId,
+              ...(payload.extra ? { extra: payload.extra } : {}),
             });
             return;
           }
 
-          if (event.name !== AG_UI_TRACE_EVENT_NAME) return;
-          emitThreadEvent(threadId, {
-            type: "trace_event",
-            name: event.name,
-            value: event.value,
-          });
+          return;
         },
 
         onRunFinalized: async () => {
@@ -477,7 +487,7 @@ export function useAgentChat({
         content: result,
         toolCallId,
         ...(pending?.step ? { step: pending.step } : {}),
-        ...(pending?.owner ? { owner: pending.owner } : {}),
+        ...(pending?.extra ? { extra: pending.extra } : {}),
         createdAt: new Date().toISOString(),
       };
 

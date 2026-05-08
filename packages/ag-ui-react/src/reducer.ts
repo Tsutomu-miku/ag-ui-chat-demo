@@ -16,7 +16,7 @@ import type { ChatMessage, ThreadAgentEvent } from "./types.js";
 function ensureAssistantMessage(
   messages: ChatMessage[],
   messageId: string,
-  metadata: Pick<ChatMessage, "step" | "owner"> = {},
+  metadata: Pick<ChatMessage, "step" | "extra"> = {},
 ): ChatMessage[] {
   const existing = messages.find((m) => m.id === messageId);
   if (existing) {
@@ -27,7 +27,7 @@ function ensureAssistantMessage(
             role: "assistant" as const,
             isStreaming: true,
             step: m.step ?? metadata.step,
-            owner: m.owner ?? metadata.owner,
+            extra: m.extra ?? metadata.extra,
           }
         : m,
     );
@@ -51,7 +51,7 @@ function ensureToolResultMessage(
   messages: ChatMessage[],
   messageId: string,
   toolCallId: string,
-  metadata: Pick<ChatMessage, "step" | "owner"> = {},
+  metadata: Pick<ChatMessage, "step" | "extra"> = {},
 ): ChatMessage[] {
   const existing = messages.find((m) => m.id === messageId);
   if (existing) {
@@ -63,7 +63,7 @@ function ensureToolResultMessage(
             toolCallId,
             isStreaming: true,
             step: m.step ?? metadata.step,
-            owner: m.owner ?? metadata.owner,
+            extra: m.extra ?? metadata.extra,
           }
         : m,
     );
@@ -152,7 +152,7 @@ export function updateMessagesWithAgentEvent(
     case "assistant_start":
       return ensureAssistantMessage(messages, event.messageId, {
         ...(event.step ? { step: event.step } : {}),
-        ...(event.owner ? { owner: event.owner } : {}),
+        ...(event.extra ? { extra: event.extra } : {}),
       });
 
     case "assistant_delta":
@@ -174,7 +174,7 @@ export function updateMessagesWithAgentEvent(
     case "tool_start": {
       return ensureAssistantMessage(messages, event.parentMessageId, {
         ...(event.step ? { step: event.step } : {}),
-        ...(event.owner ? { owner: event.owner } : {}),
+        ...(event.extra ? { extra: event.extra } : {}),
       }).map((m) => {
         if (m.id !== event.parentMessageId) return m;
         // Don't add duplicate tool call
@@ -193,7 +193,7 @@ export function updateMessagesWithAgentEvent(
               },
               complete: false,
               ...(event.step ? { step: event.step } : {}),
-              ...(event.owner ? { owner: event.owner } : {}),
+              ...(event.extra ? { extra: event.extra } : {}),
             },
           ],
         };
@@ -243,7 +243,7 @@ export function updateMessagesWithAgentEvent(
         event.toolCallId,
         {
           ...(event.step ? { step: event.step } : {}),
-          ...(event.owner ? { owner: event.owner } : {}),
+          ...(event.extra ? { extra: event.extra } : {}),
         },
       );
 
@@ -277,7 +277,7 @@ export function updateMessagesWithAgentEvent(
     case "reasoning_start":
       return ensureAssistantMessage(messages, event.messageId, {
         ...(event.step ? { step: event.step } : {}),
-        ...(event.owner ? { owner: event.owner } : {}),
+        ...(event.extra ? { extra: event.extra } : {}),
       }).map((m) =>
         m.id === event.messageId
           ? {
@@ -310,8 +310,5 @@ export function updateMessagesWithAgentEvent(
           ? { ...m, isStreaming: false, isReasoningStreaming: false }
           : m,
       );
-
-    case "trace_event":
-      return messages;
   }
 }

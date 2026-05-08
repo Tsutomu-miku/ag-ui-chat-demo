@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AG_UI_TRACE_EVENT_NAME, type ChatThread } from "../src/types.js";
+import type { ChatThread } from "../src/types.js";
 import { useThreads } from "../src/threads.js";
 
 (
@@ -269,16 +269,6 @@ describe("useThreads", () => {
         messageId: "tool-message-stream-1",
         toolCallId: "tool-1",
       });
-      hook.result.current.handleThreadEvent(activeThreadId, {
-        type: "trace_event",
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "tool.link",
-          toolCallId: "tool-1",
-          spanId: "span-researcher-1",
-        },
-      });
     });
 
     expect(hook.result.current.activeSteps).toEqual([
@@ -313,7 +303,7 @@ describe("useThreads", () => {
         },
       ],
     });
-    expect(hook.result.current.active?.traceEvents).toEqual(
+    expect(hook.result.current.active?.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: "STEP_STARTED",
@@ -346,15 +336,6 @@ describe("useThreads", () => {
           toolCallId: "tool-1",
           messageId: "tool-message-stream-1",
           delta: '{"ok"',
-        }),
-        expect.objectContaining({
-          type: "CUSTOM",
-          name: AG_UI_TRACE_EVENT_NAME,
-          value: expect.objectContaining({
-            type: "tool.link",
-            toolCallId: "tool-1",
-            spanId: "span-researcher-1",
-          }),
         }),
       ]),
     );

@@ -58,16 +58,27 @@ describe("types", () => {
       type: "function",
       function: { name: "search", arguments: '{"q":"test"}' },
       complete: true,
-      stepId: "step-1",
-      parentStepId: "step-root",
-      stepKind: "subagent",
-      stepName: "researcher",
-      parentStepName: "supervisor",
+      step: {
+        id: "step-1",
+        parentId: "step-root",
+        kind: "subagent",
+        name: "researcher",
+      },
+      extra: {
+        visualization: {
+          owner: {
+            key: "researcher:one",
+            type: "researcher",
+            instanceId: "one",
+            parentKey: "supervisor:root",
+          },
+        },
+      },
     };
 
     expect(tc.type).toBe("function");
     expect(tc.function.name).toBe("search");
-    expect(tc.stepName).toBe("researcher");
+    expect(tc.step?.name).toBe("researcher");
   });
 
   it("ChatThread has messages array", () => {
@@ -128,22 +139,27 @@ describe("types", () => {
 
   it("ActiveStep has required and optional fields", () => {
     const root: ActiveStep = {
-      stepId: "step-root",
-      stepKind: "supervisor",
       stepName: "supervisor",
+      step: {
+        id: "step-root",
+        kind: "agent",
+        name: "supervisor",
+      },
       startedAt: "2024-01-01T00:00:00.000Z",
     };
     const child: ActiveStep = {
-      stepId: "step-child",
-      parentStepId: "step-root",
-      stepKind: "subagent",
       stepName: "researcher",
-      parentStepName: "supervisor",
+      step: {
+        id: "step-child",
+        parentId: "step-root",
+        kind: "subagent",
+        name: "researcher",
+      },
       startedAt: "2024-01-01T00:00:00.000Z",
     };
 
-    expect(root.parentStepName).toBeUndefined();
-    expect(child.parentStepName).toBe("supervisor");
+    expect(root.step?.parentId).toBeUndefined();
+    expect(child.step?.parentId).toBe("step-root");
   });
 
   it("ThreadAgentEvent discriminated union covers all event types", () => {
@@ -157,7 +173,7 @@ describe("types", () => {
           createdAt: "2024-01-01T00:00:00.000Z",
         },
       },
-      { type: "assistant_start", messageId: "a1", stepId: "step-1" },
+      { type: "assistant_start", messageId: "a1", step: { id: "step-1" } },
       { type: "assistant_delta", messageId: "a1", delta: "text" },
       { type: "assistant_end", messageId: "a1" },
       {
@@ -165,8 +181,16 @@ describe("types", () => {
         parentMessageId: "a1",
         toolCallId: "tc1",
         toolCallName: "search",
-        stepId: "step-1",
-        ownerKey: "run-1:researcher:researcher-1",
+        step: { id: "step-1" },
+        extra: {
+          visualization: {
+            owner: {
+              key: "researcher:one",
+              type: "researcher",
+              instanceId: "one",
+            },
+          },
+        },
       },
       { type: "tool_args", toolCallId: "tc1", delta: '{}' },
       { type: "tool_end", toolCallId: "tc1" },
@@ -186,28 +210,12 @@ describe("types", () => {
         messageId: "tool-message-1",
         toolCallId: "tc1",
       },
-      { type: "step_started", stepId: "step-1", stepName: "researcher" },
-      { type: "step_finished", stepId: "step-1", stepName: "researcher" },
+      { type: "step_started", step: { id: "step-1", name: "researcher" } },
+      { type: "step_finished", step: { id: "step-1", name: "researcher" } },
       { type: "run_complete" },
-      {
-        type: "trace_event",
-        name: "ag-ui.trace",
-        value: {
-          version: 2,
-          type: "span.start",
-          spanId: "span-1",
-          name: "researcher",
-          kind: "subagent",
-          owner: {
-            ownerKey: "run-1:researcher:researcher-1",
-            agentType: "researcher",
-            instanceId: "researcher-1",
-          },
-        },
-      },
     ];
 
     // All event types should be representable
-    expect(events).toHaveLength(14);
+    expect(events).toHaveLength(13);
   });
 });

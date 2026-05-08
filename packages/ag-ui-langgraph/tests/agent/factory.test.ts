@@ -59,7 +59,7 @@ describe("agent factories", () => {
   it("builds and wraps a supervisor topology with named sub-agents", () => {
     const model = { modelName: "supervisor-model" };
     const writerModel = { modelName: "writer-model" };
-    const plugin = { name: "plugin" };
+    const eventExtension = { name: "event-extension" };
 
     const agent = createSupervisor({
       name: "editor",
@@ -67,7 +67,7 @@ describe("agent factories", () => {
       tools: [{ name: "handoff" } as never],
       systemPrompt: "Coordinate",
       outputMode: "last_message",
-      plugins: [plugin],
+      eventExtensions: [eventExtension],
       subAgents: {
         writer: {
           model: writerModel as never,
@@ -90,6 +90,9 @@ describe("agent factories", () => {
     }>).map((graph) => graph.config);
 
     expect(agent.name).toBe("editor");
+    expect((agent as unknown as { eventExtensions: unknown[] }).eventExtensions).toEqual([
+      eventExtension,
+    ]);
     expect(agent.graph).toMatchObject({
       kind: "supervisor-graph",
       compileConfig: { name: "editor" },

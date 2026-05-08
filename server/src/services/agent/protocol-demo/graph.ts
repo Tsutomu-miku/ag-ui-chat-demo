@@ -136,7 +136,7 @@ export class ProtocolDemoGraph {
             artifacts: [
               "supervisor",
               "same-name researchers",
-              "owner-aware trace",
+              "extra visualization",
             ],
           },
           supervisorNs,

@@ -1,5 +1,4 @@
 import { EventType, type Message } from "@ag-ui/core";
-import { AG_UI_TRACE_EVENT_NAME } from "ag-ui-langgraph";
 import { describe, expect, it } from "vitest";
 
 import { persistHistory } from "./persistence.js";
@@ -85,7 +84,7 @@ describe("persistHistory", () => {
       toolCallId: "tool-2",
       content: "4",
     });
-    expect(thread?.traceEvents.some((event) => event.type === EventType.TOOL_CALL_RESULT)).toBe(
+    expect(thread?.events.some((event) => event.type === EventType.TOOL_CALL_RESULT)).toBe(
       true,
     );
   });
@@ -165,7 +164,7 @@ describe("persistHistory", () => {
       ],
     });
     expect(
-      thread?.traceEvents.some(
+      thread?.events.some(
         (event) =>
           event.type === EventType.TOOL_CALL_ARGS &&
           event.toolCallId === "tool-partial-1",
@@ -184,11 +183,16 @@ describe("persistHistory", () => {
         value: {
           messageId: "tool-result-stream-1",
           toolCallId: "tool-stream-1",
-          stepId: "step-writer-1",
-          parentStepId: "step-supervisor-1",
-          stepKind: "subagent",
-          stepName: "writer",
-          parentStepName: "supervisor",
+        },
+        extra: {
+          visualization: {
+            step: {
+              id: "step-writer-1",
+              parentId: "step-supervisor-1",
+              kind: "subagent",
+              name: "writer",
+            },
+          },
         },
       },
       {
@@ -221,14 +225,14 @@ describe("persistHistory", () => {
       }),
     ]);
     expect(
-      thread?.traceEvents.some(
+      thread?.events.some(
         (event) =>
           event.type === EventType.CUSTOM && event.name === TOOL_RESULT_DELTA_EVENT,
       ),
     ).toBe(true);
   });
 
-  it("persists step ids and trace events for sub-agent runs", () => {
+  it("persists step ids and event records for sub-agent runs", () => {
     const threadId = `thread-${crypto.randomUUID()}`;
 
     persistHistory(threadId, [], [
@@ -306,7 +310,7 @@ describe("persistHistory", () => {
         name: "writer",
       },
     });
-    expect(thread?.traceEvents).toEqual(
+    expect(thread?.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: EventType.STEP_STARTED,
@@ -329,36 +333,49 @@ describe("persistHistory", () => {
     );
   });
 
-  it("persists canonical ag-ui.trace custom events", () => {
+  it("persists extra visualization on standard events", () => {
     const threadId = `thread-${crypto.randomUUID()}`;
 
     persistHistory(threadId, [], [
-      { type: EventType.RUN_STARTED, threadId, runId: "run-trace-v1" },
+      { type: EventType.RUN_STARTED, threadId, runId: "run-extra-1" },
       {
-        type: EventType.CUSTOM,
-        name: AG_UI_TRACE_EVENT_NAME,
-        value: {
-          version: 1,
-          type: "span.start",
-          spanId: "span-writer-1",
-          name: "writer",
-          kind: "subagent",
-          parentSpanId: "span-supervisor-1",
+        type: EventType.TOOL_CALL_START,
+        parentMessageId: "assistant-extra-1",
+        toolCallId: "tool-extra-1",
+        toolCallName: "calculate",
+        extra: {
+          visualization: {
+            step: {
+              id: "writer:final",
+              parentId: "supervisor:root",
+              kind: "subagent",
+              name: "writer",
+            },
+            owner: {
+              key: "writer:final",
+              type: "writer",
+              instanceId: "final",
+              parentKey: "supervisor:root",
+            },
+          },
         },
       },
-      { type: EventType.RUN_FINISHED, threadId, runId: "run-trace-v1" },
+      { type: EventType.RUN_FINISHED, threadId, runId: "run-extra-1" },
     ]);
 
     expect(threadId).toBeTruthy();
-    expect(getThread(threadId)?.traceEvents).toEqual(
+    expect(getThread(threadId)?.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: EventType.CUSTOM,
-          name: AG_UI_TRACE_EVENT_NAME,
-          runId: "run-trace-v1",
-          value: expect.objectContaining({
-            type: "span.start",
-            spanId: "span-writer-1",
+          type: EventType.TOOL_CALL_START,
+          toolCallId: "tool-extra-1",
+          runId: "run-extra-1",
+          extra: expect.objectContaining({
+            visualization: expect.objectContaining({
+              owner: expect.objectContaining({
+                key: "writer:final",
+              }),
+            }),
           }),
         }),
       ]),

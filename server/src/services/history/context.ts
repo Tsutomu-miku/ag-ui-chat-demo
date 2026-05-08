@@ -21,7 +21,7 @@ function storedMessageToMessage(message: StoredMessage): Message | null {
         content: message.content,
         toolCalls: message.toolCalls,
         ...(message.step ? { step: message.step } : {}),
-        ...(message.owner ? { owner: message.owner } : {}),
+        ...(message.extra ? { extra: message.extra } : {}),
       };
     case "tool":
       if (!message.toolCallId) return null;
@@ -32,7 +32,7 @@ function storedMessageToMessage(message: StoredMessage): Message | null {
         content: message.content,
         toolCallId: message.toolCallId,
         ...(message.step ? { step: message.step } : {}),
-        ...(message.owner ? { owner: message.owner } : {}),
+        ...(message.extra ? { extra: message.extra } : {}),
       };
   }
 }

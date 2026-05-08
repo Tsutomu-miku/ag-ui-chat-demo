@@ -15,8 +15,50 @@ const TOOL_RESULT_START_EVENT = "ag-ui.tool_result_start";
 const TOOL_RESULT_DELTA_EVENT = "ag-ui.tool_result_delta";
 const TOOL_RESULT_END_EVENT = "ag-ui.tool_result_end";
 
+function visualizationOwnerType(event: Record<string, unknown>) {
+  const extra = event.extra;
+  if (!extra || typeof extra !== "object" || Array.isArray(extra)) {
+    return undefined;
+  }
+  const visualization = (extra as Record<string, unknown>).visualization;
+  if (
+    !visualization ||
+    typeof visualization !== "object" ||
+    Array.isArray(visualization)
+  ) {
+    return undefined;
+  }
+  const owner = (visualization as Record<string, unknown>).owner;
+  if (!owner || typeof owner !== "object" || Array.isArray(owner)) {
+    return undefined;
+  }
+  const type = (owner as Record<string, unknown>).type;
+  return typeof type === "string" ? type : undefined;
+}
+
+function visualizationOwnerKey(event: Record<string, unknown>) {
+  const extra = event.extra;
+  if (!extra || typeof extra !== "object" || Array.isArray(extra)) {
+    return undefined;
+  }
+  const visualization = (extra as Record<string, unknown>).visualization;
+  if (
+    !visualization ||
+    typeof visualization !== "object" ||
+    Array.isArray(visualization)
+  ) {
+    return undefined;
+  }
+  const owner = (visualization as Record<string, unknown>).owner;
+  if (!owner || typeof owner !== "object" || Array.isArray(owner)) {
+    return undefined;
+  }
+  const key = (owner as Record<string, unknown>).key;
+  return typeof key === "string" ? key : undefined;
+}
+
 describe("protocol demo agent", () => {
-  it("emits distinct supervisor and writer traceable messages for the sub-agent tree demo", async () => {
+  it("emits distinct supervisor and writer events with demo visualization extra", async () => {
     const events: Array<Record<string, unknown>> = [];
 
     for await (const event of runProtocolDemoAgent({
@@ -66,18 +108,23 @@ describe("protocol demo agent", () => {
     ).toBe(true);
     expect(
       events.some(
-        (event) => event.type === "CUSTOM" && event.name === "ag-ui.trace",
-      ),
-    ).toBe(true);
-    expect(
-      events.some(
         (event) =>
           event.type === "TEXT_MESSAGE_START" &&
           event.messageId === WRITER_OUTPUT_MESSAGE_ID &&
-          event.agentName === "writer" &&
-          typeof event.agentId === "string",
+          visualizationOwnerType(event) === "writer",
       ),
     ).toBe(true);
+    expect(
+      events
+        .filter(
+          (event) =>
+            event.type === "TEXT_MESSAGE_START" &&
+            [RESEARCHER_ALPHA_OUTPUT_MESSAGE_ID, RESEARCHER_BETA_OUTPUT_MESSAGE_ID].includes(
+              String(event.messageId),
+            ),
+        )
+        .map((event) => visualizationOwnerKey(event)),
+    ).toEqual(["researcher:alpha", "researcher:beta"]);
     expect(
       events.some(
         (event) =>

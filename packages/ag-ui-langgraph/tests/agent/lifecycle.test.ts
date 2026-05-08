@@ -23,7 +23,7 @@ import { Command } from "@langchain/langgraph";
 import { describe, expect, it, vi } from "vitest";
 
 import { LangGraphAgent, type LangGraphAgentConfig } from "../../src/agent.js";
-import { createProtocolTracePlugin } from "../../src/plugins/trace.js";
+import { mergeEventExtra } from "../../src/extensions.js";
 import { LangGraphEventTypes, CustomEventNames } from "../../src/types.js";
 
 // ── Helpers ──
@@ -932,424 +932,136 @@ describe("event translation: step management", () => {
     expect((lastStepFinished as any).stepName).toBe("myNode");
   });
 
-  it("enriches step and tool events with trace ids when the protocol trace plugin is enabled", async () => {
+  it("does not emit built-in trace or attribution fields by default", async () => {
     const graph = createMockGraph([
-      ...textStreamEvents("thinking...", "callModel"),
       ...toolCallStreamEvents(
         "search_web",
         "tc-1",
         { q: "weather" },
-        "callModel",
+        "agent",
+        "msg-1",
       ),
       toolEndEvent("search_web", "tc-1", "sunny", "tools"),
     ]);
+    const agent = new LangGraphAgent({ name: "supervisor", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+    const customTrace = events.find(
+      (event) =>
+        event.type === EventType.CUSTOM &&
+        (event as { name?: string }).name === "ag-ui.trace",
+    );
+    const attributed = events.find(
+      (event) =>
+        event.type === EventType.TOOL_CALL_START &&
+        ("agentId" in event || "agentName" in event || "owner" in event),
+    );
+
+    expect(customTrace).toBeUndefined();
+    expect(attributed).toBeUndefined();
+  });
+
+  it("lets extensions add extra to standard events before they are yielded", async () => {
+    const graph = createMockGraph(
+      withCheckpointNamespace(
+        [
+          ...toolCallStreamEvents(
+            "search_web",
+            "tc-1",
+            { q: "weather" },
+            "agent",
+            "msg-1",
+          ),
+          toolEndEvent("search_web", "tc-1", "sunny", "tools"),
+        ],
+        "researcher:branch-a|agent:aaa",
+      ),
+    );
     const agent = new LangGraphAgent({
       name: "supervisor",
       graph,
-      plugins: [createProtocolTracePlugin()],
-    });
-
-    const events = await collectEvents(agent.clone().run(makeInput()));
-    const stepStarted = events.find(
-      (event) => event.type === EventType.STEP_STARTED,
-    ) as (BaseEvent & { stepId?: string; stepKind?: string }) | undefined;
-    const toolStart = events.find(
-      (event) => event.type === EventType.TOOL_CALL_START,
-    ) as (BaseEvent & { stepId?: string; stepKind?: string }) | undefined;
-    const toolResult = events.find(
-      (event) => event.type === EventType.TOOL_CALL_RESULT,
-    ) as (BaseEvent & { stepId?: string; stepKind?: string }) | undefined;
-
-    expect(stepStarted?.stepId).toBeTruthy();
-    expect(stepStarted?.stepKind).toBe("node");
-    expect(toolStart?.stepId).toBe(stepStarted?.stepId);
-    expect(toolResult?.stepId).toBe(stepStarted?.stepId);
-    expect(toolResult?.stepKind).toBe("node");
-  });
-
-  it("stamps agent instance attribution in-band while keeping canonical trace events", async () => {
-    const graph = createMockGraph([
-      ...textStreamEvents("Routing", "supervisor", "msg-supervisor-1"),
-      ...textStreamEvents("Draft", "writer", "msg-writer-1"),
-    ]);
-    const agent = new LangGraphAgent({
-      name: "supervisor",
-      graph,
-      subAgents: ["writer"],
-    });
-
-    const events = await collectEvents(agent.clone().run(makeInput()));
-    expect(
-      events.some(
-        (event) =>
-          event.type === EventType.CUSTOM &&
-          (event as { name?: string }).name === "ag-ui.trace",
-      ),
-    ).toBe(true);
-
-    type Stamped = BaseEvent & {
-      messageId?: string;
-      agentId?: string;
-      agentName?: string;
-    };
-    const supervisorMsgStart = events.find(
-      (event) =>
-        event.type === EventType.TEXT_MESSAGE_START &&
-        (event as Stamped).messageId === "msg-supervisor-1",
-    ) as Stamped | undefined;
-    const writerMsgStart = events.find(
-      (event) =>
-        event.type === EventType.TEXT_MESSAGE_START &&
-        (event as Stamped).messageId === "msg-writer-1",
-    ) as Stamped | undefined;
-    expect(supervisorMsgStart?.agentId).toBe("run-1:supervisor:1");
-    expect(supervisorMsgStart?.agentName).toBe("supervisor");
-    expect(writerMsgStart?.agentId).toBe("run-1:writer:1");
-    expect(writerMsgStart?.agentName).toBe("writer");
-  });
-
-  it("does not merge parallel same-name sub-agent instances", async () => {
-    const writerNsA = "writer:branch-a|agent:aaa";
-    const writerNsB = "writer:branch-b|agent:bbb";
-    const graph = createMockGraph([
-      ...withCheckpointNamespace(
-        toolCallStreamEvents(
-          "compose_text",
-          "tc-writer-a",
-          { topic: "alpha" },
-          "agent",
-          "msg-writer-a",
-        ),
-        writerNsA,
-      ),
-      ...withCheckpointNamespace(
-        toolCallStreamEvents(
-          "compose_text",
-          "tc-writer-b",
-          { topic: "beta" },
-          "agent",
-          "msg-writer-b",
-        ),
-        writerNsB,
-      ),
-    ]);
-    const agent = new LangGraphAgent({
-      name: "supervisor",
-      graph,
-      subAgents: ["writer"],
-    });
-
-    const events = await collectEvents(agent.clone().run(makeInput()));
-    type Stamped = BaseEvent & {
-      toolCallId?: string;
-      agentId?: string;
-      agentName?: string;
-    };
-    const writerA = events.find(
-      (event) =>
-        event.type === EventType.TOOL_CALL_START &&
-        (event as Stamped).toolCallId === "tc-writer-a",
-    ) as Stamped | undefined;
-    const writerB = events.find(
-      (event) =>
-        event.type === EventType.TOOL_CALL_START &&
-        (event as Stamped).toolCallId === "tc-writer-b",
-    ) as Stamped | undefined;
-
-    expect(writerA?.agentName).toBe("writer");
-    expect(writerB?.agentName).toBe("writer");
-    expect(writerA?.agentId).toBe("run-1:writer:branch-a");
-    expect(writerB?.agentId).toBe("run-1:writer:branch-b");
-    expect(writerA?.agentId).not.toBe(writerB?.agentId);
-  });
-
-  it("uses checkpoint namespace to keep one sub-agent instance id across agent and tools nodes", async () => {
-    const graph = createMockGraph([
-      ...withCheckpointNamespace(
-        textStreamEvents("Routing to writer", "agent", "msg-supervisor-1"),
-        "supervisor:root|agent:1",
-      ),
-      ...withCheckpointNamespace(
-        textStreamEvents("Writer planning", "agent", "msg-writer-1"),
-        "writer:subgraph|agent:1",
-      ),
-      ...withCheckpointNamespace(
-        toolCallStreamEvents(
-          "calculate",
-          "tc-calc",
-          { expression: "2+2" },
-          "tools",
-          "msg-writer-1",
-        ),
-        "writer:subgraph|tools:1",
-      ),
-      ...withCheckpointNamespace(
-        textStreamEvents("Writer final", "agent", "msg-writer-2"),
-        "writer:subgraph|agent:2",
-      ),
-    ]);
-    const agent = new LangGraphAgent({
-      name: "supervisor",
-      graph,
-      subAgents: ["writer"],
-    });
-
-    const events = await collectEvents(agent.clone().run(makeInput()));
-    type Stamped = BaseEvent & {
-      messageId?: string;
-      toolCallId?: string;
-      agentId?: string;
-      agentName?: string;
-    };
-    const writerMsg1 = events.find(
-      (event) =>
-        event.type === EventType.TEXT_MESSAGE_START &&
-        (event as Stamped).messageId === "msg-writer-1",
-    ) as Stamped | undefined;
-    const writerMsg2 = events.find(
-      (event) =>
-        event.type === EventType.TEXT_MESSAGE_START &&
-        (event as Stamped).messageId === "msg-writer-2",
-    ) as Stamped | undefined;
-    const writerToolStart = events.find(
-      (event) =>
-        event.type === EventType.TOOL_CALL_START &&
-        (event as Stamped).toolCallId === "tc-calc",
-    ) as Stamped | undefined;
-
-    expect(writerMsg1?.agentId).toBe("run-1:writer:subgraph");
-    expect(writerMsg2?.agentId).toBe("run-1:writer:subgraph");
-    expect(writerToolStart?.agentId).toBe("run-1:writer:subgraph");
-    expect(writerMsg1?.agentName).toBe("writer");
-    expect(writerMsg2?.agentName).toBe("writer");
-    expect(writerToolStart?.agentName).toBe("writer");
-  });
-
-  it("attributes toolcalls to the correct sub-agent when two sub-agents run in parallel with interleaved events", async () => {
-    // Two parallel sub-agents (writer + researcher) emit interleaved events.
-    // The full `langgraph_checkpoint_ns` differs between them (uuid suffix),
-    // so attribution must flow from the source event's namespace, not from
-    // a single global "active span" pointer.
-    const writerNs = "writer:subgraph|agent:aaa";
-    const researcherNs = "researcher:subgraph|agent:bbb";
-
-    const graph = createMockGraph([
-      // Supervisor routes work to two sub-agents.
-      ...withCheckpointNamespace(
-        textStreamEvents("Spawning", "agent", "msg-supervisor-1"),
-        "supervisor:root|agent:1",
-      ),
-      // Writer text stream — writer span becomes active.
-      ...withCheckpointNamespace(
-        textStreamEvents("Writer running", "agent", "msg-writer-1"),
-        writerNs,
-      ),
-      // Researcher text stream — active span FLIPS to researcher.
-      ...withCheckpointNamespace(
-        textStreamEvents("Researcher running", "agent", "msg-researcher-1"),
-        researcherNs,
-      ),
-      // Writer toolcall arrives while researcher is the most recent span.
-      // Without Plan C this would be misattributed to researcher.
-      ...withCheckpointNamespace(
-        toolCallStreamEvents(
-          "compose_text",
-          "tc-writer",
-          { topic: "tokyo" },
-          "agent",
-          "msg-writer-2",
-        ),
-        writerNs,
-      ),
-      // Researcher toolcall arrives next, must attribute to researcher.
-      ...withCheckpointNamespace(
-        toolCallStreamEvents(
-          "search_web",
-          "tc-researcher",
-          { query: "tokyo facts" },
-          "agent",
-          "msg-researcher-2",
-        ),
-        researcherNs,
-      ),
-    ]);
-    const agent = new LangGraphAgent({
-      name: "supervisor",
-      graph,
-      subAgents: ["writer", "researcher"],
-    });
-
-    const events = await collectEvents(agent.clone().run(makeInput()));
-
-    // Every toolcall event must carry agent attribution stamped in place.
-    type Stamped = BaseEvent & {
-      toolCallId?: string;
-      agentId?: string;
-      agentName?: string;
-    };
-    const writerToolStart = events.find(
-      (event) =>
-        event.type === EventType.TOOL_CALL_START &&
-        (event as Stamped).toolCallId === "tc-writer",
-    ) as Stamped | undefined;
-    const researcherToolStart = events.find(
-      (event) =>
-        event.type === EventType.TOOL_CALL_START &&
-        (event as Stamped).toolCallId === "tc-researcher",
-    ) as Stamped | undefined;
-
-    expect(writerToolStart?.agentName).toBe("writer");
-    expect(writerToolStart?.agentId).toBe("run-1:writer:subgraph");
-
-    expect(researcherToolStart?.agentName).toBe("researcher");
-    expect(researcherToolStart?.agentId).toBe("run-1:researcher:subgraph");
-    expect(writerToolStart?.agentId).not.toBe(researcherToolStart?.agentId);
-
-    // TOOL_CALL_ARGS / TOOL_CALL_END follow-ups for each toolcall must carry
-    // the same agent attribution as their TOOL_CALL_START.
-    const writerArgs = events.find(
-      (event) =>
-        event.type === EventType.TOOL_CALL_ARGS &&
-        (event as Stamped).toolCallId === "tc-writer",
-    ) as Stamped | undefined;
-    const researcherArgs = events.find(
-      (event) =>
-        event.type === EventType.TOOL_CALL_ARGS &&
-        (event as Stamped).toolCallId === "tc-researcher",
-    ) as Stamped | undefined;
-    expect(writerArgs?.agentId).toBe(writerToolStart?.agentId);
-    expect(researcherArgs?.agentId).toBe(researcherToolStart?.agentId);
-  });
-
-  it("attributes tool-only assistant messages to the active sub-agent", async () => {
-    const graph = createMockGraph([
-      ...toolCallStreamEvents(
-        "calculate",
-        "tc-calc",
-        { expression: "2+2" },
-        "writer",
-      ),
-      toolEndEvent("calculate", "tc-calc", "4", "writer"),
-    ]);
-    const agent = new LangGraphAgent({
-      name: "supervisor",
-      graph,
-      subAgents: ["writer"],
-    });
-
-    const events = await collectEvents(agent.clone().run(makeInput()));
-    type Stamped = BaseEvent & {
-      messageId?: string;
-      toolCallId?: string;
-      agentId?: string;
-      agentName?: string;
-    };
-    const toolStart = events.find(
-      (event) =>
-        event.type === EventType.TOOL_CALL_START &&
-        (event as Stamped).toolCallId === "tc-calc",
-    ) as Stamped | undefined;
-    const aiMessageStart = events.find(
-      (event) =>
-        event.type === EventType.TEXT_MESSAGE_START &&
-        (event as Stamped).messageId === "ai-msg-1",
-    ) as Stamped | undefined;
-
-    expect(toolStart?.agentId).toBe("run-1:writer:1");
-    expect(toolStart?.agentName).toBe("writer");
-    if (aiMessageStart) {
-      expect(aiMessageStart.agentId).toBe("run-1:writer:1");
-      expect(aiMessageStart.agentName).toBe("writer");
-    }
-  });
-
-  it("keeps delayed toolcalls attributed to the writer sub-agent after the active span switches back to supervisor", async () => {
-    const graph = createMockGraph([
-      ...withCheckpointNamespace(
-        textStreamEvents("Routing to writer", "agent", "msg-supervisor-1"),
-        "supervisor:root|agent:1",
-      ),
-      ...withCheckpointNamespace(
-        textStreamEvents("Writer planning", "agent", "msg-writer-1"),
-        "writer:subgraph|agent:1",
-      ),
-      ...withCheckpointNamespace(
-        textStreamEvents("Supervisor resumed", "agent", "msg-supervisor-2"),
-        "supervisor:root|agent:2",
-      ),
-      {
-        event: LangGraphEventTypes.OnChatModelEnd,
-        name: "ChatOpenAI",
-        data: {
-          output: {
-            id: "msg-writer-1",
-            tool_calls: [
-              {
-                id: "tc-write-delayed",
-                function: {
-                  name: "write_text",
-                  arguments: '{"content":"Tokyo note"}',
+      eventExtensions: [
+        {
+          name: "test-extra",
+          beforeDispatchEvent(event, context) {
+            if (
+              event.type === EventType.TOOL_CALL_START ||
+              event.type === EventType.TOOL_CALL_ARGS ||
+              event.type === EventType.TOOL_CALL_END ||
+              event.type === EventType.TOOL_CALL_RESULT
+            ) {
+              mergeEventExtra(event, {
+                test: {
+                  nodeName: context.langgraph.nodeName,
+                  checkpointNamespace: context.langgraph.checkpointNamespace,
+                  langgraphEvent: context.langgraph.event,
                 },
-              },
-            ],
+              });
+            }
           },
         },
-        metadata: {
-          langgraph_node: "supervisor",
-          langgraph_checkpoint_ns: "supervisor:root|agent:2",
-        },
-      },
-      {
-        event: LangGraphEventTypes.OnToolEnd,
-        name: "write_text",
-        data: {
-          output: new LCToolMessage({
-            id: "tool-msg-write_text",
-            content: '{"draft":"Tokyo note"}',
-            tool_call_id: "tc-write-delayed",
-            name: "write_text",
-          }),
-        },
-        metadata: { langgraph_node: "tools" },
-      },
-    ]);
-    const agent = new LangGraphAgent({
-      name: "supervisor",
-      graph,
-      subAgents: ["writer"],
+      ],
     });
 
     const events = await collectEvents(agent.clone().run(makeInput()));
-    const delayedResultEvent = events.find(
+    const toolEvents = events.filter(
       (event) =>
-        event.type === EventType.TOOL_CALL_RESULT &&
-        (event as BaseEvent & { toolCallId?: string }).toolCallId ===
-          "tc-write-delayed",
-    ) as
-      | (BaseEvent & {
-          messageId?: string;
-          agentId?: string;
-          agentName?: string;
-        })
-      | undefined;
+        event.type === EventType.TOOL_CALL_START ||
+        event.type === EventType.TOOL_CALL_ARGS ||
+        event.type === EventType.TOOL_CALL_END ||
+        event.type === EventType.TOOL_CALL_RESULT,
+    ) as Array<BaseEvent & { extra?: { test?: Record<string, unknown> } }>;
 
-    type Stamped = BaseEvent & {
-      toolCallId?: string;
-      agentId?: string;
-      agentName?: string;
-      parentMessageId?: string;
-    };
-    const delayedToolStart = events.find(
-      (event) =>
-        event.type === EventType.TOOL_CALL_START &&
-      (event as Stamped).toolCallId === "tc-write-delayed",
-    ) as Stamped | undefined;
+    expect(toolEvents).toHaveLength(4);
+    expect(toolEvents.map((event) => event.extra?.test)).toEqual([
+      expect.objectContaining({
+        nodeName: "agent",
+        checkpointNamespace: "researcher:branch-a|agent:aaa",
+        langgraphEvent: LangGraphEventTypes.OnChatModelStream,
+      }),
+      expect.objectContaining({
+        nodeName: "agent",
+        checkpointNamespace: "researcher:branch-a|agent:aaa",
+        langgraphEvent: LangGraphEventTypes.OnChatModelStream,
+      }),
+      expect.objectContaining({
+        nodeName: "agent",
+        checkpointNamespace: "researcher:branch-a|agent:aaa",
+        langgraphEvent: LangGraphEventTypes.OnChatModelEnd,
+      }),
+      expect.objectContaining({
+        nodeName: "tools",
+        checkpointNamespace: "researcher:branch-a|agent:aaa",
+        langgraphEvent: LangGraphEventTypes.OnToolEnd,
+      }),
+    ]);
+  });
 
-    expect(delayedToolStart?.agentId).toBe("run-1:writer:subgraph");
-    expect(delayedToolStart?.agentName).toBe("writer");
-    expect(delayedToolStart?.parentMessageId).toBe("msg-writer-1");
-    expect(delayedResultEvent?.agentId).toBe("run-1:writer:subgraph");
-    expect(delayedResultEvent?.agentName).toBe("writer");
+  it("lets extensions suppress events", async () => {
+    const graph = createMockGraph([
+      ...toolCallStreamEvents("search_web", "tc-1", { q: "weather" }),
+    ]);
+    const agent = new LangGraphAgent({
+      name: "agent",
+      graph,
+      eventExtensions: [
+        {
+          name: "suppress-args",
+          beforeDispatchEvent(event) {
+            return event.type === EventType.TOOL_CALL_ARGS ? null : event;
+          },
+        },
+      ],
+    });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+
+    expect(events.some((event) => event.type === EventType.TOOL_CALL_START)).toBe(
+      true,
+    );
+    expect(events.some((event) => event.type === EventType.TOOL_CALL_ARGS)).toBe(
+      false,
+    );
   });
 });
 
@@ -2063,5 +1775,41 @@ describe("full agent loop", () => {
     // The outer AG-UI runId must stay stable and must not be overwritten by
     // internal LangGraph event run_id values.
     expect(finished.runId).toBe("run-1");
+  });
+
+  it("does not emit step events for the internal __start__ node", async () => {
+    const graph = createMockGraph([
+      {
+        event: LangGraphEventTypes.OnChainStart,
+        name: "__start__",
+        data: {},
+        metadata: { langgraph_node: "__start__" },
+      },
+      {
+        event: LangGraphEventTypes.OnChatModelStream,
+        name: "ChatOpenAI",
+        data: {
+          chunk: new AIMessageChunk({ id: "msg-1", content: "hi" }),
+        },
+        metadata: { langgraph_node: "agent" },
+      },
+      {
+        event: LangGraphEventTypes.OnChatModelEnd,
+        name: "ChatOpenAI",
+        data: {},
+        metadata: { langgraph_node: "agent" },
+      },
+    ]);
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+
+    expect(
+      events.some(
+        (event) =>
+          event.type === EventType.STEP_STARTED &&
+          (event as { stepName?: string }).stepName === "__start__",
+      ),
+    ).toBe(false);
   });
 });

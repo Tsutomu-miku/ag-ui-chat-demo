@@ -94,14 +94,6 @@ import {
   normalizeRunInput,
   type NormalizedRunAgentInput,
 } from "./runtime/input.js";
-import type {
-  LangGraphPlugin,
-  LangGraphPluginContext,
-} from "./plugins/trace.js";
-import {
-  buildTraceOwnerFromSource,
-  type TraceOwnerMetadata,
-} from "./runtime/trace-owner.js";
 import { handleReasoningEvent as handleReasoningEventForRun } from "./agent/reasoning.js";
 import {
   clearMessageInProgress,
@@ -116,19 +108,10 @@ import {
   getCheckpointMessages,
 } from "./agent/stream-preparation.js";
 import {
-  classifyTraceStepKind as classifyTraceStepKindForRun,
-  createTraceState,
-  emitTraceLinksForEvent as emitTraceLinksForRun,
-  finishTraceSpan as finishTraceSpanForRun,
-  getTraceNamespaceRoot,
-  nextTraceAgentId as nextTraceAgentIdForRun,
-  resetTraceState,
-  resolveTraceAgentId as resolveTraceAgentIdForRun,
-  resolveTraceStepName as resolveTraceStepNameForRun,
-  startTraceSpan as startTraceSpanForRun,
-  type TraceState,
-  type TraceStateContext,
-} from "./agent/trace-state.js";
+  createExtensionContext,
+  type LangGraphEventExtension,
+  type LangGraphEventExtensionContext,
+} from "./extensions.js";
 
 // ── Configuration types ──
 
@@ -142,10 +125,8 @@ export interface LangGraphAgentConfig {
   description?: string;
   /** Optional runnable config */
   config?: Record<string, unknown>;
-  /** Optional protocol plugins */
-  plugins?: LangGraphPlugin[];
-  /** Known sub-agent names used for agent attribution/classification */
-  subAgents?: string[];
+  /** Optional event extensions for adding business-defined `extra` data */
+  eventExtensions?: LangGraphEventExtension[];
 }
 
 // ── LangGraphAgent class (aligned with Python ag_ui_langgraph) ──
@@ -161,14 +142,11 @@ export class LangGraphAgent {
   readonly description?: string;
   readonly graph: LocalCompiledGraph;
   protected readonly _config: Record<string, unknown>;
-  protected readonly plugins: LangGraphPlugin[];
-  protected readonly traceSubAgents: Set<string>;
+  protected readonly eventExtensions: LangGraphEventExtension[];
 
   /** Per-request mutable state (reset on clone) */
   protected messagesInProgress: MessagesInProgressRecord = {};
   protected activeRun: RunMetadata | null = null;
-  protected traceRunId: string | null = null;
-  protected traceState: TraceState = createTraceState();
 
   /** Subgraph detection */
   protected subgraphs: Set<string>;
@@ -184,8 +162,7 @@ export class LangGraphAgent {
     this.description = config.description;
     this.graph = config.graph;
     this._config = config.config ?? {};
-    this.plugins = [...(config.plugins ?? [])];
-    this.traceSubAgents = new Set(config.subAgents ?? []);
+    this.eventExtensions = [...(config.eventExtensions ?? [])];
 
     this.subgraphs = detectSubgraphNames(this.graph);
   }
@@ -200,8 +177,9 @@ export class LangGraphAgent {
         graph: this.graph,
         description: this.description,
         config: { ...this._config },
-        plugins: this.plugins.map((plugin) => plugin.clone?.() ?? plugin),
-        subAgents: [...this.traceSubAgents],
+        eventExtensions: this.eventExtensions.map(
+          (extension) => extension.clone?.() ?? extension,
+        ),
       });
     } catch (exc) {
       throw new TypeError(
@@ -224,16 +202,17 @@ export class LangGraphAgent {
    *
    * @returns The event to yield, or null to suppress it.
    */
-  protected _dispatchEvent(event: BaseEvent): BaseEvent | null {
+  protected _dispatchEvent(
+    event: BaseEvent,
+    sourceEvent?: LangGraphStreamEvent | null,
+  ): BaseEvent | null {
     let nextEvent: BaseEvent | null = event;
-    const context = this.getPluginContext();
+    const context = this.getExtensionContext(sourceEvent);
 
-    for (const plugin of this.plugins) {
+    for (const extension of this.eventExtensions) {
       if (!nextEvent) break;
-      const transformed: BaseEvent | null | void = plugin.beforeDispatchEvent?.(
-        nextEvent,
-        context,
-      );
+      const transformed: BaseEvent | null | void =
+        extension.beforeDispatchEvent?.(nextEvent, context);
       if (transformed === null) {
         nextEvent = null;
         break;
@@ -246,175 +225,16 @@ export class LangGraphAgent {
     return nextEvent ? sanitizeRawPayloads(nextEvent) : null;
   }
 
-  protected getPluginContext(): LangGraphPluginContext {
-    return {
+  protected getExtensionContext(
+    sourceEvent?: LangGraphStreamEvent | null,
+  ): LangGraphEventExtensionContext {
+    return createExtensionContext({
       agentName: this.name,
       activeRun: this.activeRun,
       currentSubgraph: this.currentSubgraph,
       subgraphs: this.subgraphs,
-    };
-  }
-
-  protected getTraceContext(): TraceStateContext {
-    return {
-      agentName: this.name,
-      traceRunId: this.traceRunId,
-      activeRun: this.activeRun,
-      currentSubgraph: this.currentSubgraph,
-      subgraphs: this.subgraphs,
-      traceSubAgents: this.traceSubAgents,
-      state: this.traceState,
-      dispatchEvent: (event: BaseEvent) => this._dispatchEvent(event),
-    };
-  }
-
-  protected getTraceNamespaceRoot(
-    sourceEvent?: LangGraphStreamEvent | null,
-  ): string | undefined {
-    return getTraceNamespaceRoot(sourceEvent);
-  }
-
-  protected resolveTraceStepName(
-    stepName: string,
-    sourceEvent?: LangGraphStreamEvent | null,
-  ): string {
-    return resolveTraceStepNameForRun(
-      this.getTraceContext(),
-      stepName,
       sourceEvent,
-    );
-  }
-
-  protected classifyTraceStepKind(
-    stepName: import("./types.js").TraceStepKind | string,
-  ): import("./types.js").TraceStepKind {
-    return classifyTraceStepKindForRun(this.getTraceContext(), stepName);
-  }
-
-  protected nextTraceAgentId(stepName: string): string {
-    return nextTraceAgentIdForRun(this.getTraceContext(), stepName);
-  }
-
-  protected resolveTraceAgentId(
-    stepName: string,
-    sourceEvent?: LangGraphStreamEvent | null,
-  ): string {
-    return resolveTraceAgentIdForRun(
-      this.getTraceContext(),
-      stepName,
-      sourceEvent,
-    );
-  }
-
-  protected getOwnerMetadataForEvent(
-    event: BaseEvent &
-      Partial<{
-        messageId: string;
-        parentMessageId: string;
-        toolCallId: string;
-        owner: {
-          key: string;
-        };
-      }>,
-  ): TraceOwnerMetadata | null {
-    const directOwnerKey = event.owner?.key;
-    if (directOwnerKey) {
-      return this.traceState.traceOwners.get(directOwnerKey) ?? null;
-    }
-
-    if (event.toolCallId) {
-      const ownerKey = this.traceState.traceToolOwners.get(event.toolCallId);
-      if (ownerKey) return this.traceState.traceOwners.get(ownerKey) ?? null;
-    }
-
-    if (event.parentMessageId) {
-      const ownerKey = this.traceState.traceMessageOwners.get(
-        event.parentMessageId,
-      );
-      if (ownerKey) return this.traceState.traceOwners.get(ownerKey) ?? null;
-    }
-
-    if (event.messageId) {
-      const ownerKey = this.traceState.traceMessageOwners.get(event.messageId);
-      if (ownerKey) return this.traceState.traceOwners.get(ownerKey) ?? null;
-    }
-
-    return null;
-  }
-
-  protected attachTraceOwnerToEvent(event: BaseEvent): BaseEvent {
-    const mutable = event as BaseEvent &
-      Partial<{
-        messageId: string;
-        parentMessageId: string;
-        toolCallId: string;
-        owner: {
-          key: string;
-          type: string;
-          instanceId: string;
-          parentKey?: string;
-        };
-      }>;
-    const owner = this.getOwnerMetadataForEvent(mutable);
-    if (!owner) return event;
-
-    mutable.owner ??= {
-      key: owner.key,
-      type: owner.type,
-      instanceId: owner.instanceId,
-      ...(owner.parentKey ? { parentKey: owner.parentKey } : {}),
-    };
-    return mutable;
-  }
-
-  protected *handleTraceOwnerBoundary(
-    currentNodeName: string,
-    sourceEvent: LangGraphStreamEvent,
-  ): Generator<BaseEvent> {
-    const activeSpan = this.traceState.activeTraceSpan;
-    if (!activeSpan) return;
-
-    const nextStepName = this.resolveTraceStepName(
-      currentNodeName,
-      sourceEvent,
-    );
-    if (activeSpan.name !== nextStepName) return;
-
-    const nextOwner = buildTraceOwnerFromSource({
-      runId: this.traceRunId ?? this.activeRun?.id,
-      stepName: nextStepName,
-      kind: this.classifyTraceStepKind(nextStepName),
-      event: sourceEvent,
-      owner: activeSpan.owner.parentKey
-        ? { parentKey: activeSpan.owner.parentKey }
-        : undefined,
     });
-
-    if (nextOwner.key === activeSpan.owner.key) return;
-
-    yield* this.finishTraceSpan(activeSpan.name, sourceEvent);
-    yield* this.startTraceSpan(currentNodeName, sourceEvent);
-  }
-
-  protected *startTraceSpan(
-    stepName: string,
-    sourceEvent?: LangGraphStreamEvent | null,
-  ): Generator<BaseEvent> {
-    yield* startTraceSpanForRun(this.getTraceContext(), stepName, sourceEvent);
-  }
-
-  protected *finishTraceSpan(
-    stepName: string,
-    sourceEvent?: LangGraphStreamEvent | null,
-  ): Generator<BaseEvent> {
-    yield* finishTraceSpanForRun(this.getTraceContext(), stepName, sourceEvent);
-  }
-
-  protected *emitTraceLinksForEvent(
-    event: BaseEvent,
-    sourceEvent?: LangGraphStreamEvent | null,
-  ): Generator<BaseEvent> {
-    yield* emitTraceLinksForRun(this.getTraceContext(), event, sourceEvent);
   }
 
   // ── Message-in-progress tracking ──
@@ -475,39 +295,31 @@ export class LangGraphAgent {
       throw new Error("handleNodeChange called outside an active run");
     }
 
-    if (nodeName === "__end__") nodeName = null;
+    if (nodeName === "__start__" || nodeName === "__end__") nodeName = null;
 
     if (nodeName !== this.activeRun.node_name) {
-      const currentTraceAgentId = this.traceState.activeTraceSpan?.agentId;
-      const nextTraceStepName = nodeName
-        ? this.resolveTraceStepName(nodeName, sourceEvent)
-        : null;
-      const nextTraceAgentId = nodeName
-        ? this.resolveTraceAgentId(nodeName, sourceEvent)
-        : null;
-
       // End current step
       if (this.activeRun.node_name) {
-        const ev = this._dispatchEvent({
-          type: EventType.STEP_FINISHED,
-          stepName: this.activeRun.node_name,
-        } as BaseEvent);
+        const ev = this._dispatchEvent(
+          {
+            type: EventType.STEP_FINISHED,
+            stepName: this.activeRun.node_name,
+          } as BaseEvent,
+          sourceEvent,
+        );
         if (ev) yield ev;
-        if (currentTraceAgentId && currentTraceAgentId !== nextTraceAgentId) {
-          yield* this.finishTraceSpan(this.activeRun.node_name, sourceEvent);
-        }
       }
 
       // Start new step
       if (nodeName) {
-        const ev = this._dispatchEvent({
-          type: EventType.STEP_STARTED,
-          stepName: nodeName,
-        } as BaseEvent);
+        const ev = this._dispatchEvent(
+          {
+            type: EventType.STEP_STARTED,
+            stepName: nodeName,
+          } as BaseEvent,
+          sourceEvent,
+        );
         if (ev) yield ev;
-        if (nextTraceStepName && nextTraceAgentId !== currentTraceAgentId) {
-          yield* this.startTraceSpan(nodeName, sourceEvent);
-        }
       }
 
       this.activeRun.node_name = nodeName;
@@ -520,11 +332,12 @@ export class LangGraphAgent {
     reasoningData: import("./types.js").LangGraphReasoning | null,
     encryptedData: string | null,
     parentMessageId?: string | null,
+    sourceEvent?: LangGraphStreamEvent | null,
   ): Generator<BaseEvent> {
     yield* handleReasoningEventForRun(
       {
         activeRun: this.activeRun,
-        dispatchEvent: (event) => this._dispatchEvent(event),
+        dispatchEvent: (event) => this._dispatchEvent(event, sourceEvent),
       },
       reasoningData,
       encryptedData,
@@ -815,11 +628,9 @@ export class LangGraphAgent {
     const forwardedProps = input.forwarded_props ?? {};
 
     this.activeRun = createRunMetadata({ runId, threadId });
-    this.traceRunId = runId;
-    resetTraceState(this.traceState);
 
-    for (const plugin of this.plugins) {
-      plugin.onRunStart?.(this.getPluginContext());
+    for (const extension of this.eventExtensions) {
+      extension.onRunStart?.(this.getExtensionContext());
     }
 
     try {
@@ -917,27 +728,8 @@ export class LangGraphAgent {
           subgraphInfo.isSubgraphStream &&
           subgraphInfo.currentSubgraph !== this.currentSubgraph
         ) {
-          const currentNodeName = this.activeRun.node_name;
-          const previousTraceAgentId = this.traceState.activeTraceSpan?.agentId;
           this.currentSubgraph =
             subgraphInfo.currentSubgraph ?? ROOT_SUBGRAPH_NAME;
-          const nextTraceStepName = currentNodeName
-            ? this.resolveTraceStepName(currentNodeName, event)
-            : null;
-          const nextTraceAgentId = currentNodeName
-            ? this.resolveTraceAgentId(currentNodeName, event)
-            : null;
-
-          if (
-            currentNodeName &&
-            previousTraceAgentId &&
-            previousTraceAgentId !== nextTraceAgentId
-          ) {
-            yield* this.finishTraceSpan(currentNodeName, event);
-            if (nextTraceStepName) {
-              yield* this.startTraceSpan(currentNodeName, event);
-            }
-          }
 
           for await (const snapEv of this.getStateAndMessagesSnapshots(
             streamConfig,
@@ -949,10 +741,13 @@ export class LangGraphAgent {
         if (eventType === "error") {
           const errorMessage =
             typeof eventData.message === "string" ? eventData.message : null;
-          const ev = this._dispatchEvent({
-            type: EventType.RUN_ERROR,
-            message: errorMessage ?? "Unknown error",
-          } as BaseEvent);
+          const ev = this._dispatchEvent(
+            {
+              type: EventType.RUN_ERROR,
+              message: errorMessage ?? "Unknown error",
+            } as BaseEvent,
+            event,
+          );
           if (ev) yield ev;
           break;
         }
@@ -991,8 +786,6 @@ export class LangGraphAgent {
           )) {
             yield stepEvent;
           }
-        } else if (currentNodeName) {
-          yield* this.handleTraceOwnerBoundary(currentNodeName, event);
         }
 
         markPredictStateToolIfNeeded(event, this.activeRun);
@@ -1023,18 +816,24 @@ export class LangGraphAgent {
               this.activeRun.state_reliable = false;
             }
           } else {
-            const snapEv = this._dispatchEvent({
-              type: EventType.STATE_SNAPSHOT,
-              snapshot: this.getStateSnapshot(streamState),
-            } as BaseEvent);
+            const snapEv = this._dispatchEvent(
+              {
+                type: EventType.STATE_SNAPSHOT,
+                snapshot: this.getStateSnapshot(streamState),
+              } as BaseEvent,
+              event,
+            );
             if (snapEv) yield snapEv;
           }
         }
 
-        const rawEv = this._dispatchEvent({
-          type: EventType.RAW,
+        const rawEv = this._dispatchEvent(
+          {
+            type: EventType.RAW,
+            event,
+          } as BaseEvent,
           event,
-        } as BaseEvent);
+        );
         if (rawEv) yield rawEv;
 
         for await (const agUiEvent of this._handleSingleEvent(
@@ -1105,11 +904,9 @@ export class LangGraphAgent {
       } as BaseEvent);
       if (finishEv) yield finishEv;
     } finally {
-      for (const plugin of this.plugins) {
-        plugin.onRunFinish?.(this.getPluginContext());
+      for (const extension of this.eventExtensions) {
+        extension.onRunFinish?.(this.getExtensionContext());
       }
-      resetTraceState(this.traceState);
-      this.traceRunId = null;
       this.activeRun = null;
     }
   }
@@ -1132,17 +929,16 @@ export class LangGraphAgent {
       clearMessageInProgress: (id) => {
         clearMessageInProgress(this.messagesInProgress, id);
       },
-      dispatchEvent: (ev) => this._dispatchEvent(ev),
+      dispatchEvent: (ev) => this._dispatchEvent(ev, event),
       handleReasoningEvent: (reasoningData, encryptedData, parentMessageId) =>
         this.handleReasoningEvent(
           reasoningData,
           encryptedData,
           parentMessageId,
+          event,
         ),
     })) {
-      const enrichedEvent = this.attachTraceOwnerToEvent(agUiEvent);
-      yield enrichedEvent;
-      yield* this.emitTraceLinksForEvent(enrichedEvent, event);
+      yield agUiEvent;
     }
   }
 }

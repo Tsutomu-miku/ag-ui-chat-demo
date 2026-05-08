@@ -5,7 +5,7 @@ import { createSupervisor as createLangGraphSupervisor } from "@langchain/langgr
 
 import { LangGraphAgent } from "./agent.js";
 import type { LocalCompiledGraph } from "./types.js";
-import type { LangGraphPlugin } from "./plugins/trace.js";
+import type { LangGraphEventExtension } from "./extensions.js";
 
 /** Configuration for createReactAgent factory (convenience). */
 export interface ReactAgentConfig {
@@ -17,8 +17,8 @@ export interface ReactAgentConfig {
   tools?: StructuredToolInterface[];
   /** System prompt */
   systemPrompt?: string;
-  /** Optional protocol plugins */
-  plugins?: LangGraphPlugin[];
+  /** Optional event extensions for adding business-defined `extra` data */
+  eventExtensions?: LangGraphEventExtension[];
 }
 
 /** Sub-agent definition for supervisor-shaped factory configs. */
@@ -47,8 +47,8 @@ export interface SupervisorConfig {
   subAgents: Record<string, SubAgentDefinition>;
   /** How much sub-agent history to preserve in the supervisor conversation */
   outputMode?: SupervisorOutputMode;
-  /** Optional protocol plugins */
-  plugins?: LangGraphPlugin[];
+  /** Optional event extensions for adding business-defined `extra` data */
+  eventExtensions?: LangGraphEventExtension[];
 }
 
 /**
@@ -65,7 +65,7 @@ export function createReactAgent(config: ReactAgentConfig): LangGraphAgent {
   return new LangGraphAgent({
     name: config.name ?? "agent",
     graph,
-    plugins: config.plugins,
+    eventExtensions: config.eventExtensions,
   });
 }
 
@@ -98,7 +98,6 @@ export function createSupervisor(config: SupervisorConfig): LangGraphAgent {
   return new LangGraphAgent({
     name: supervisorName,
     graph,
-    plugins: config.plugins,
-    subAgents: Object.keys(config.subAgents),
+    eventExtensions: config.eventExtensions,
   });
 }

@@ -1,9 +1,8 @@
-import { useEffect } from "react";
 import type {
   ActiveStep,
+  AgentEventRecord,
   ChatMessage,
   ToolCallFunction,
-  TraceEvent,
 } from "ag-ui-react";
 
 import { TraceMarkdown } from "./TraceMarkdown";
@@ -25,7 +24,7 @@ import {
 interface Props {
   messages: ChatMessage[];
   activeSteps: ActiveStep[];
-  traceEvents: TraceEvent[];
+  events: AgentEventRecord[];
   toolResultById: Map<
     string,
     {
@@ -38,69 +37,10 @@ interface Props {
 export function AgentTraceView({
   messages,
   activeSteps,
-  traceEvents,
+  events,
   toolResultById,
 }: Props) {
-  const traceData = buildAgentTraceData(messages, activeSteps, traceEvents);
-
-  useEffect(() => {
-    console.log("[trace-debug] agent-trace-input", {
-      messages: messages.map((message) => ({
-        id: message.id,
-        role: message.role,
-        step: message.step,
-        owner: message.owner,
-        toolCalls: (message.toolCalls ?? []).map((toolCall) => ({
-          id: toolCall.id,
-          name: toolCall.function.name,
-          step: toolCall.step,
-          owner: toolCall.owner,
-        })),
-      })),
-      activeSteps: activeSteps.map((step) => ({
-        step: step.step,
-        stepName: step.stepName,
-        owner: step.owner,
-      })),
-      traceEvents: traceEvents.map((event) => {
-        if (event.type === "CUSTOM") {
-          return {
-            type: event.type,
-            name: event.name,
-            value: event.value,
-          };
-        }
-
-        return {
-          type: event.type,
-          messageId: event.messageId,
-          parentMessageId: event.parentMessageId,
-          toolCallId: event.toolCallId,
-          step: event.step,
-          owner: event.owner,
-        };
-      }),
-      traceData: traceData
-        ? {
-            roots: traceData.roots,
-            nodes: Object.fromEntries(
-              Object.entries(traceData.nodes).map(([stepId, node]) => [
-                stepId,
-                {
-                  stepName: node.stepName,
-                  stepKind: node.stepKind,
-                  parentStepId: node.parentStepId,
-                  parentStepName: node.parentStepName,
-                  childStepIds: node.childStepIds,
-                  messageIds: node.messages.map((message) => message.id),
-                  toolCallIds: node.toolCalls.map((toolCall) => toolCall.id),
-                },
-              ]),
-            ),
-          }
-        : null,
-    });
-  }, [activeSteps, messages, traceData, traceEvents]);
+  const traceData = buildAgentTraceData(messages, activeSteps, events);
 
   const activeStepIds = new Set(
     activeSteps

@@ -7,7 +7,7 @@ import type {
   State,
 } from "../types.js";
 import { CustomEventNames, LangGraphEventTypes } from "../types.js";
-import { normalizeCheckpointNamespace } from "../trace.js";
+import { normalizeCheckpointNamespace } from "../runtime/langgraph-metadata.js";
 import {
   contentToString,
   jsonSafeStringify,

@@ -42,7 +42,6 @@ export {
   createReactAgent,
   createSupervisor,
 } from "./factory.js";
-export { createProtocolTracePlugin } from "./plugins/trace.js";
 
 export type {
   LangGraphAgentConfig,
@@ -54,10 +53,13 @@ export type {
   SupervisorConfig,
   SupervisorOutputMode,
 } from "./factory.js";
+
+export { mergeEventExtra } from "./extensions.js";
 export type {
-  LangGraphPlugin,
-  LangGraphPluginContext,
-} from "./plugins/trace.js";
+  EventExtra,
+  LangGraphEventExtension,
+  LangGraphEventExtensionContext,
+} from "./extensions.js";
 
 // ── Types (aligned with Python types.py) ──
 export type {
@@ -76,7 +78,6 @@ export type {
   ForwardedProps,
   LangGraphStreamEvent,
   ToolCallChunk,
-  TraceStepKind,
 } from "./types.js";
 
 export {
@@ -84,19 +85,6 @@ export {
   CustomEventNames,
   DEFAULT_SCHEMA_KEYS,
 } from "./types.js";
-
-export {
-  AG_UI_TRACE_EVENT_NAME,
-  AG_UI_TRACE_PROTOCOL_VERSION,
-  createTraceCustomEvent,
-} from "./trace.js";
-
-export type {
-  AgUiTraceCustomEvent,
-  AgUiTraceCustomValue,
-  AgUiTraceEvent,
-  AgUiTraceSource,
-} from "./trace.js";
 
 // ── Message conversion (aligned with Python utils.py) ──
 export {

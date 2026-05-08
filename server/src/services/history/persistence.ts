@@ -7,17 +7,17 @@ import {
   messageContentToString,
 } from "./message-utils.js";
 import {
-  appendTraceEvents,
+  appendEvents,
   appendMessages,
   getOrCreateThread,
+  type StoredExtra,
   type StoredMessage,
-  type StoredOwner,
   type StoredRole,
   type StoredStep,
   type StoredToolCall,
 } from "./store.js";
 import { createLogger } from "../../config/logger.js";
-import { toStoredTraceEvents } from "./trace-events.js";
+import { toStoredEvents } from "./events.js";
 
 const logger = createLogger("history");
 const TOOL_RESULT_START_EVENT = "ag-ui.tool_result_start";
@@ -33,7 +33,7 @@ type PersistableEvent = BaseEvent &
     toolCallName: string;
     parentMessageId: string;
     step: StoredStep;
-    owner: StoredOwner;
+    extra: StoredExtra;
   }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,33 +56,16 @@ function getStoredStep(value: unknown): StoredStep | undefined {
   };
 }
 
-function getStoredOwner(value: unknown): StoredOwner | undefined {
+function getStoredExtra(value: unknown): StoredExtra | undefined {
   if (!isRecord(value)) return undefined;
 
-  const nested = isRecord(value.owner) ? value.owner : null;
-  if (
-    !nested ||
-    typeof nested.key !== "string" ||
-    typeof nested.type !== "string" ||
-    typeof nested.instanceId !== "string"
-  ) {
-    return undefined;
-  }
-
-  return {
-    key: nested.key,
-    type: nested.type,
-    instanceId: nested.instanceId,
-    ...(typeof nested.parentKey === "string"
-      ? { parentKey: nested.parentKey }
-      : {}),
-  };
+  return isRecord(value.extra) ? value.extra : undefined;
 }
 
 function getStoredContext(value: unknown) {
   return {
     ...(getStoredStep(value) ? { step: getStoredStep(value) } : {}),
-    ...(getStoredOwner(value) ? { owner: getStoredOwner(value) } : {}),
+    ...(getStoredExtra(value) ? { extra: getStoredExtra(value) } : {}),
   };
 }
 
@@ -145,7 +128,7 @@ export function persistHistory(
       toolCallId: message.role === "tool" ? message.toolCallId : undefined,
       toolCalls: message.role === "assistant" ? message.toolCalls : undefined,
       step: (message as Partial<StoredMessage>).step,
-      owner: (message as Partial<StoredMessage>).owner,
+      extra: (message as Partial<StoredMessage>).extra,
       createdAt: new Date().toISOString(),
     };
 
@@ -163,7 +146,7 @@ export function persistHistory(
         toolCalls: StoredToolCall[];
         toolCallArgs: Map<string, string>;
         step?: StoredStep;
-        owner?: StoredOwner;
+        extra?: StoredExtra;
       }
     | undefined;
   const toolResultMessages = new Map<
@@ -180,7 +163,7 @@ export function persistHistory(
     };
 
     currentAssistant.step ||= event ? getStoredStep(event) : undefined;
-    currentAssistant.owner ||= event ? getStoredOwner(event) : undefined;
+    currentAssistant.extra ||= event ? getStoredExtra(event) : undefined;
 
     return currentAssistant;
   };
@@ -201,7 +184,7 @@ export function persistHistory(
           ? currentAssistant.toolCalls
           : undefined,
       step: currentAssistant.step,
-      owner: currentAssistant.owner,
+      extra: currentAssistant.extra,
       createdAt: new Date().toISOString(),
     } satisfies StoredMessage;
 
@@ -233,7 +216,7 @@ export function persistHistory(
           role: "tool",
           toolCallId,
           step: existing.step ?? payload.step,
-          owner: existing.owner ?? payload.owner,
+          extra: existing.extra ?? payload.extra,
         }
       : {
           id: messageId,
@@ -241,7 +224,7 @@ export function persistHistory(
           content: "",
           toolCallId,
           step: payload.step,
-          owner: payload.owner,
+          extra: payload.extra,
           createdAt: new Date().toISOString(),
         };
 
@@ -347,18 +330,18 @@ export function persistHistory(
     appendMessages(threadId, newMessages);
   }
 
-  const traceEvents = toStoredTraceEvents(events, thread.traceEvents.length);
-  if (traceEvents.length > 0) {
-    appendTraceEvents(threadId, traceEvents);
+  const storedEvents = toStoredEvents(events, thread.events.length);
+  if (storedEvents.length > 0) {
+    appendEvents(threadId, storedEvents);
   }
 
-  if (newMessages.length > 0 || traceEvents.length > 0) {
+  if (newMessages.length > 0 || storedEvents.length > 0) {
     logger.debug("history persisted", {
       threadId,
       inputMessageCount: inputMessages.length,
       eventCount: events.length,
       storedMessageCount: newMessages.length,
-      storedTraceEventCount: traceEvents.length,
+      storedEventCount: storedEvents.length,
       assistantCharacterCount,
       toolCallCount,
     });

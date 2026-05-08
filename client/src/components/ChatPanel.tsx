@@ -11,7 +11,7 @@ import { FrontendToolUI } from "./FrontendToolUI";
 import { ExecutionTree } from "./ExecutionTree";
 import {
   buildTurnPresentation,
-  filterTraceEventsForTurn,
+  filterEventsForTurn,
   getMessageSourceLabel,
 } from "./trace";
 import { FRONTEND_TOOLS } from "../tools/frontendTools";
@@ -163,7 +163,7 @@ export function ChatPanel({
   };
 
   const messages = thread?.messages ?? [];
-  const traceEvents = thread?.traceEvents ?? [];
+  const events = thread?.events ?? [];
   const { hasMessages, hasStreamingMessage, hasActiveToolCall } =
     buildMessageView(messages);
   const conversationTurns = buildConversationTurns(messages);
@@ -332,15 +332,15 @@ export function ChatPanel({
         {conversationTurns.map((turn, index) => {
           const isLatestTurn = index === conversationTurns.length - 1;
           const turnActiveSteps = isLatestTurn ? threadActions.activeSteps : [];
-          const turnTraceEvents = filterTraceEventsForTurn(
-            traceEvents,
+          const turnEvents = filterEventsForTurn(
+            events,
             turn.events,
             isLatestTurn,
           );
           const presentation = buildTurnPresentation(
             turn.events,
             turnActiveSteps,
-            turnTraceEvents,
+            turnEvents,
           );
           const shouldShowTree =
             isLatestTurn && presentation.traceMode !== "none";
@@ -360,7 +360,7 @@ export function ChatPanel({
                 <ExecutionTree
                   messages={turn.events}
                   activeSteps={turnActiveSteps}
-                  traceEvents={turnTraceEvents}
+                  events={turnEvents}
                   mode={presentation.traceMode}
                 />
               )}

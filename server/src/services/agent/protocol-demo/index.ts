@@ -5,11 +5,12 @@ import {
 } from "ag-ui-langgraph";
 
 import { ProtocolDemoGraph } from "./graph.js";
+import { createDemoVisualizationExtension } from "../visualization-extension.js";
 
 const protocolAgent = new LangGraphAgent({
   name: "protocol-demo",
   graph: new ProtocolDemoGraph() as unknown as LocalCompiledGraph,
-  subAgents: ["researcher", "writer"],
+  eventExtensions: [createDemoVisualizationExtension()],
 });
 
 export async function* runProtocolDemoAgent(

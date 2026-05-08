@@ -2,10 +2,9 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  AG_UI_TRACE_EVENT_NAME,
-  type FrontendToolDefinition,
-  type ThreadAgentEvent,
+import type {
+  FrontendToolDefinition,
+  ThreadAgentEvent,
 } from "../src/types.js";
 import { useAgentChat } from "../src/hooks.js";
 
@@ -123,19 +122,6 @@ describe("useAgentChat", () => {
               parentId: "step-supervisor-1",
               kind: "subagent",
               name: "researcher",
-            },
-          },
-        });
-        subscriber.onCustomEvent({
-          event: {
-            type: "CUSTOM",
-            name: AG_UI_TRACE_EVENT_NAME,
-            value: {
-              version: 1,
-              type: "message.link",
-              messageId: "assistant-1",
-              spanId: "span-researcher-1",
-              role: "assistant",
             },
           },
         });
@@ -264,20 +250,6 @@ describe("useAgentChat", () => {
       [
         "thread-1",
         {
-          type: "trace_event",
-          name: AG_UI_TRACE_EVENT_NAME,
-          value: {
-            version: 1,
-            type: "message.link",
-            messageId: "assistant-1",
-            spanId: "span-researcher-1",
-            role: "assistant",
-          },
-        } satisfies ThreadAgentEvent,
-      ],
-      [
-        "thread-1",
-        {
           type: "assistant_delta",
           messageId: "assistant-1",
           delta: "Hello",
@@ -311,6 +283,9 @@ describe("useAgentChat", () => {
         {
           type: "tool_end",
           toolCallId: "tool-1",
+          step: {
+            name: "researcher",
+          },
         } satisfies ThreadAgentEvent,
       ],
       [

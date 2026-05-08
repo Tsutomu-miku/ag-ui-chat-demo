@@ -1,13 +1,12 @@
 import { EventType, type BaseEvent } from "@ag-ui/core";
-import { AG_UI_TRACE_EVENT_NAME } from "ag-ui-langgraph";
 
-import type { StoredOwner, StoredStep, StoredTraceEvent } from "./store.js";
+import type { StoredEvent, StoredExtra, StoredStep } from "./store.js";
 
 const TOOL_RESULT_START_EVENT = "ag-ui.tool_result_start";
 const TOOL_RESULT_DELTA_EVENT = "ag-ui.tool_result_delta";
 const TOOL_RESULT_END_EVENT = "ag-ui.tool_result_end";
 
-type PersistableTraceEvent = BaseEvent &
+type PersistableStoredEvent = BaseEvent &
   Partial<{
     runId: string;
     messageId: string;
@@ -20,10 +19,11 @@ type PersistableTraceEvent = BaseEvent &
     toolCallId: string;
     toolCallName: string;
     step: StoredStep;
-    owner: StoredOwner;
+    stepName: string;
+    extra: StoredExtra;
   }>;
 
-const TRACE_EVENT_TYPES = new Set<string>([
+const STORED_EVENT_TYPES = new Set<string>([
   EventType.RUN_STARTED,
   EventType.RUN_FINISHED,
   EventType.STEP_STARTED,
@@ -43,13 +43,7 @@ const TRACE_EVENT_TYPES = new Set<string>([
   EventType.REASONING_END,
 ]);
 
-function isCanonicalTraceEvent(event: PersistableTraceEvent) {
-  return (
-    event.type === EventType.CUSTOM && event.name === AG_UI_TRACE_EVENT_NAME
-  );
-}
-
-function isToolResultChunkEvent(event: PersistableTraceEvent) {
+function isToolResultChunkEvent(event: PersistableStoredEvent) {
   return (
     event.type === EventType.CUSTOM &&
     (event.name === TOOL_RESULT_START_EVENT ||
@@ -62,22 +56,20 @@ function now() {
   return new Date().toISOString();
 }
 
-export function toStoredTraceEvents(
+export function toStoredEvents(
   events: BaseEvent[],
   existingCount: number,
-): StoredTraceEvent[] {
+): StoredEvent[] {
   const runId = (
     events.find((event) => event.type === EventType.RUN_STARTED) as
-      | (PersistableTraceEvent & { runId?: string })
+      | (PersistableStoredEvent & { runId?: string })
       | undefined
   )?.runId;
 
-  return (events as PersistableTraceEvent[])
+  return (events as PersistableStoredEvent[])
     .filter(
       (event) =>
-        TRACE_EVENT_TYPES.has(event.type) ||
-        isCanonicalTraceEvent(event) ||
-        isToolResultChunkEvent(event),
+        STORED_EVENT_TYPES.has(event.type) || isToolResultChunkEvent(event),
     )
     .map((event, index) => ({
       type: event.type,
@@ -96,6 +88,7 @@ export function toStoredTraceEvents(
       ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
       ...(event.toolCallName ? { toolCallName: event.toolCallName } : {}),
       ...(event.step ? { step: event.step } : {}),
-      ...(event.owner ? { owner: event.owner } : {}),
+      ...(event.stepName ? { stepName: event.stepName } : {}),
+      ...(event.extra ? { extra: event.extra } : {}),
     }));
 }

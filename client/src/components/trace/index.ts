@@ -8,7 +8,7 @@ export {
   buildTimelineTraceEntries,
   buildToolResultMap,
   buildTurnPresentation,
-  filterTraceEventsForTurn,
+  filterEventsForTurn,
   formatJSON,
   getAgentInfo,
   getDelegatedAgent,

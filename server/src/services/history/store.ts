@@ -9,19 +9,14 @@ export interface StoredStep {
   name?: string;
 }
 
-export interface StoredOwner {
-  key: string;
-  type: string;
-  instanceId: string;
-  parentKey?: string;
-}
+export type StoredExtra = Record<string, unknown>;
 
 export type StoredRole = "user" | "assistant" | "tool";
 
 export type StoredToolCall = ToolCall &
   Partial<{
     step: StoredStep;
-    owner: StoredOwner;
+    extra: StoredExtra;
   }>;
 
 export interface StoredMessage {
@@ -31,11 +26,11 @@ export interface StoredMessage {
   toolCallId?: string;
   toolCalls?: StoredToolCall[];
   step?: StoredStep;
-  owner?: StoredOwner;
+  extra?: StoredExtra;
   createdAt: string;
 }
 
-export interface StoredTraceEvent {
+export interface StoredEvent {
   type: string;
   sequence: number;
   createdAt: string;
@@ -50,14 +45,15 @@ export interface StoredTraceEvent {
   toolCallId?: string;
   toolCallName?: string;
   step?: StoredStep;
-  owner?: StoredOwner;
+  stepName?: string;
+  extra?: StoredExtra;
 }
 
 export interface ChatThread {
   id: string;
   title: string;
   messages: StoredMessage[];
-  traceEvents: StoredTraceEvent[];
+  events: StoredEvent[];
   createdAt: string;
   updatedAt: string;
 }
@@ -80,7 +76,7 @@ export function getOrCreateThread(threadId: string): ChatThread {
     id: threadId,
     title: "New Chat",
     messages: [],
-    traceEvents: [],
+    events: [],
     createdAt: now(),
     updatedAt: now(),
   };
@@ -114,19 +110,19 @@ export function appendMessages(threadId: string, messages: StoredMessage[]): Cha
   return thread;
 }
 
-export function appendTraceEvents(
+export function appendEvents(
   threadId: string,
-  traceEvents: StoredTraceEvent[],
+  events: StoredEvent[],
 ): ChatThread {
   const thread = getOrCreateThread(threadId);
 
-  thread.traceEvents.push(...traceEvents);
+  thread.events.push(...events);
   thread.updatedAt = now();
 
-  logger.debug("trace events appended", {
+  logger.debug("events appended", {
     threadId,
-    appendedCount: traceEvents.length,
-    totalCount: thread.traceEvents.length,
+    appendedCount: events.length,
+    totalCount: thread.events.length,
   });
 
   return thread;

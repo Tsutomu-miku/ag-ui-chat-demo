@@ -35,6 +35,7 @@ import {
 } from "./subagents/researcher.js";
 import { writerTools, WRITER_SYSTEM_PROMPT } from "./subagents/writer.js";
 import { createAgentModel } from "./model.js";
+import { createDemoVisualizationExtension } from "./visualization-extension.js";
 
 // ── Agent definition ──
 
@@ -326,7 +327,7 @@ Completion rule:
   _agent = new LangGraphAgent({
     name: "supervisor",
     graph,
-    subAgents: ["weather_researcher", "travel_guidance_researcher", "writer"],
+    eventExtensions: [createDemoVisualizationExtension()],
   });
 
   return _agent;
