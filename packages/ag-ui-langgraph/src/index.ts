@@ -45,6 +45,7 @@ export {
 
 export type {
   LangGraphAgentConfig,
+  LangGraphDiagnosticEventsConfig,
 } from "./agent.js";
 
 export type {

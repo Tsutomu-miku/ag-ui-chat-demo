@@ -1,6 +1,6 @@
 {
   "name": "ag-ui-langgraph",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "description": "AG-UI protocol adapter for LangGraph \u2014 TypeScript implementation aligned with Python ag-ui-langgraph",
   "type": "module",
   "main": "./dist/index.js",

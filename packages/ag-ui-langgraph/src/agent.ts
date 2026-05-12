@@ -127,6 +127,34 @@ export interface LangGraphAgentConfig {
   config?: Record<string, unknown>;
   /** Optional event extensions for adding business-defined `extra` data */
   eventExtensions?: LangGraphEventExtension[];
+  /** Optional diagnostic protocol events. Defaults preserve existing behavior. */
+  diagnosticEvents?: LangGraphDiagnosticEventsConfig;
+}
+
+export interface LangGraphDiagnosticEventsConfig {
+  /** Emit LangGraph raw stream events. */
+  raw?: boolean;
+  /** Emit state snapshots. */
+  stateSnapshots?: boolean;
+  /** Emit messages snapshots. */
+  messagesSnapshots?: boolean;
+}
+
+type ResolvedDiagnosticEventsConfig = Required<LangGraphDiagnosticEventsConfig>;
+
+const DEFAULT_DIAGNOSTIC_EVENTS: ResolvedDiagnosticEventsConfig = {
+  raw: true,
+  stateSnapshots: true,
+  messagesSnapshots: true,
+};
+
+function resolveDiagnosticEvents(
+  config?: LangGraphDiagnosticEventsConfig,
+): ResolvedDiagnosticEventsConfig {
+  return {
+    ...DEFAULT_DIAGNOSTIC_EVENTS,
+    ...(config ?? {}),
+  };
 }
 
 // ── LangGraphAgent class (aligned with Python ag_ui_langgraph) ──
@@ -143,6 +171,7 @@ export class LangGraphAgent {
   readonly graph: LocalCompiledGraph;
   protected readonly _config: Record<string, unknown>;
   protected readonly eventExtensions: LangGraphEventExtension[];
+  protected readonly diagnosticEvents: ResolvedDiagnosticEventsConfig;
 
   /** Per-request mutable state (reset on clone) */
   protected messagesInProgress: MessagesInProgressRecord = {};
@@ -163,6 +192,7 @@ export class LangGraphAgent {
     this.graph = config.graph;
     this._config = config.config ?? {};
     this.eventExtensions = [...(config.eventExtensions ?? [])];
+    this.diagnosticEvents = resolveDiagnosticEvents(config.diagnosticEvents);
 
     this.subgraphs = detectSubgraphNames(this.graph);
   }
@@ -177,6 +207,7 @@ export class LangGraphAgent {
         graph: this.graph,
         description: this.description,
         config: { ...this._config },
+        diagnosticEvents: { ...this.diagnosticEvents },
         eventExtensions: this.eventExtensions.map(
           (extension) => extension.clone?.() ?? extension,
         ),
@@ -206,6 +237,10 @@ export class LangGraphAgent {
     event: BaseEvent,
     sourceEvent?: LangGraphStreamEvent | null,
   ): BaseEvent | null {
+    if (!this.isDiagnosticEventEnabled(event.type)) {
+      return null;
+    }
+
     let nextEvent: BaseEvent | null = event;
     const context = this.getExtensionContext(sourceEvent);
 
@@ -223,6 +258,17 @@ export class LangGraphAgent {
     }
 
     return nextEvent ? sanitizeRawPayloads(nextEvent) : null;
+  }
+
+  protected isDiagnosticEventEnabled(type: BaseEvent["type"]): boolean {
+    if (type === EventType.RAW) return this.diagnosticEvents.raw;
+    if (type === EventType.STATE_SNAPSHOT) {
+      return this.diagnosticEvents.stateSnapshots;
+    }
+    if (type === EventType.MESSAGES_SNAPSHOT) {
+      return this.diagnosticEvents.messagesSnapshots;
+    }
+    return true;
   }
 
   protected getExtensionContext(
@@ -359,24 +405,28 @@ export class LangGraphAgent {
     try {
       const stateObj = await getGraphState(this.graph, config);
       if (!stateObj) return;
-      const stateValues = snapshotValues(stateObj);
 
       // STATE_SNAPSHOT
-      const snapEv = this._dispatchEvent({
-        type: EventType.STATE_SNAPSHOT,
-        snapshot: this.getStateSnapshot(stateValues),
-      } as BaseEvent);
-      if (snapEv) yield snapEv;
+      if (this.diagnosticEvents.stateSnapshots) {
+        const stateValues = snapshotValues(stateObj);
+        const snapEv = this._dispatchEvent({
+          type: EventType.STATE_SNAPSHOT,
+          snapshot: this.getStateSnapshot(stateValues),
+        } as BaseEvent);
+        if (snapEv) yield snapEv;
+      }
 
       // MESSAGES_SNAPSHOT
-      const rawMessages = snapshotMessages(stateObj);
-      const filteredMessages = this._filterOrphanToolMessages(rawMessages);
-      const aguiMessages = langchainMessagesToAgui(filteredMessages);
-      const msgEv = this._dispatchEvent({
-        type: EventType.MESSAGES_SNAPSHOT,
-        messages: aguiMessages,
-      } as BaseEvent);
-      if (msgEv) yield msgEv;
+      if (this.diagnosticEvents.messagesSnapshots) {
+        const rawMessages = snapshotMessages(stateObj);
+        const filteredMessages = this._filterOrphanToolMessages(rawMessages);
+        const aguiMessages = langchainMessagesToAgui(filteredMessages);
+        const msgEv = this._dispatchEvent({
+          type: EventType.MESSAGES_SNAPSHOT,
+          messages: aguiMessages,
+        } as BaseEvent);
+        if (msgEv) yield msgEv;
+      }
     } catch {
       // Snapshot emission is best-effort — some graphs may not support getState
     }
@@ -815,7 +865,7 @@ export class LangGraphAgent {
             if (modelMadeToolCall) {
               this.activeRun.state_reliable = false;
             }
-          } else {
+          } else if (this.diagnosticEvents.stateSnapshots) {
             const snapEv = this._dispatchEvent(
               {
                 type: EventType.STATE_SNAPSHOT,
@@ -827,14 +877,16 @@ export class LangGraphAgent {
           }
         }
 
-        const rawEv = this._dispatchEvent(
-          {
-            type: EventType.RAW,
+        if (this.diagnosticEvents.raw) {
+          const rawEv = this._dispatchEvent(
+            {
+              type: EventType.RAW,
+              event,
+            } as BaseEvent,
             event,
-          } as BaseEvent,
-          event,
-        );
-        if (rawEv) yield rawEv;
+          );
+          if (rawEv) yield rawEv;
+        }
 
         for await (const agUiEvent of this._handleSingleEvent(
           event,

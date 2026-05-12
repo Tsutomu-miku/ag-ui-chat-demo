@@ -4,6 +4,7 @@ import { createReactAgent as createLangGraphReactAgent } from "@langchain/langgr
 import { createSupervisor as createLangGraphSupervisor } from "@langchain/langgraph-supervisor";
 
 import { LangGraphAgent } from "./agent.js";
+import type { LangGraphDiagnosticEventsConfig } from "./agent.js";
 import type { LocalCompiledGraph } from "./types.js";
 import type { LangGraphEventExtension } from "./extensions.js";
 
@@ -19,6 +20,8 @@ export interface ReactAgentConfig {
   systemPrompt?: string;
   /** Optional event extensions for adding business-defined `extra` data */
   eventExtensions?: LangGraphEventExtension[];
+  /** Optional diagnostic protocol events. Defaults preserve existing behavior. */
+  diagnosticEvents?: LangGraphDiagnosticEventsConfig;
 }
 
 /** Sub-agent definition for supervisor-shaped factory configs. */
@@ -49,6 +52,8 @@ export interface SupervisorConfig {
   outputMode?: SupervisorOutputMode;
   /** Optional event extensions for adding business-defined `extra` data */
   eventExtensions?: LangGraphEventExtension[];
+  /** Optional diagnostic protocol events. Defaults preserve existing behavior. */
+  diagnosticEvents?: LangGraphDiagnosticEventsConfig;
 }
 
 /**
@@ -65,6 +70,7 @@ export function createReactAgent(config: ReactAgentConfig): LangGraphAgent {
   return new LangGraphAgent({
     name: config.name ?? "agent",
     graph,
+    diagnosticEvents: config.diagnosticEvents,
     eventExtensions: config.eventExtensions,
   });
 }
@@ -98,6 +104,7 @@ export function createSupervisor(config: SupervisorConfig): LangGraphAgent {
   return new LangGraphAgent({
     name: supervisorName,
     graph,
+    diagnosticEvents: config.diagnosticEvents,
     eventExtensions: config.eventExtensions,
   });
 }

@@ -1452,6 +1452,92 @@ describe("forwarded_props", () => {
 });
 
 // ============================================================
+// Diagnostic event controls
+// ============================================================
+
+describe("diagnostic event controls", () => {
+  it("preserves RAW and snapshot diagnostics by default", async () => {
+    const graph = createMockGraph(textStreamEvents("Hi", "node1")) as any;
+    graph.getState = vi.fn(async () => ({
+      values: { messages: [] },
+      tasks: [{ interrupts: [] }],
+      metadata: { writes: {} },
+      next: [],
+    }));
+    const agent = new LangGraphAgent({ name: "agent", graph });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+
+    expect(events.some((e) => e.type === EventType.RAW)).toBe(true);
+    expect(events.some((e) => e.type === EventType.STATE_SNAPSHOT)).toBe(true);
+    expect(events.some((e) => e.type === EventType.MESSAGES_SNAPSHOT)).toBe(
+      true,
+    );
+  });
+
+  it("does not create RAW events when raw diagnostics are disabled", async () => {
+    const graph = createMockGraph(textStreamEvents("Hi", "node1"));
+    const agent = new LangGraphAgent({
+      name: "agent",
+      graph,
+      diagnosticEvents: { raw: false },
+    });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+
+    expect(events.some((e) => e.type === EventType.RAW)).toBe(false);
+    expect(events.some((e) => e.type === EventType.TEXT_MESSAGE_CONTENT)).toBe(
+      true,
+    );
+  });
+
+  it("does not emit message snapshots when message snapshots are disabled", async () => {
+    const graph = createMockGraph([]) as any;
+    graph.getState = vi.fn(async () => ({
+      values: { messages: [] },
+      tasks: [{ interrupts: [] }],
+      metadata: { writes: {} },
+      next: [],
+    }));
+    const agent = new LangGraphAgent({
+      name: "agent",
+      graph,
+      diagnosticEvents: {
+        stateSnapshots: false,
+        messagesSnapshots: false,
+      },
+    });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+
+    expect(events.some((e) => e.type === EventType.STATE_SNAPSHOT)).toBe(false);
+    expect(events.some((e) => e.type === EventType.MESSAGES_SNAPSHOT)).toBe(
+      false,
+    );
+  });
+
+  it("filters manually emitted state snapshots when state snapshots are disabled", async () => {
+    const graph = createMockGraph([
+      {
+        event: LangGraphEventTypes.OnCustomEvent,
+        name: CustomEventNames.ManuallyEmitState,
+        data: { counter: 42 },
+        metadata: {},
+      },
+    ]);
+    const agent = new LangGraphAgent({
+      name: "agent",
+      graph,
+      diagnosticEvents: { stateSnapshots: false },
+    });
+
+    const events = await collectEvents(agent.clone().run(makeInput()));
+
+    expect(events.some((e) => e.type === EventType.STATE_SNAPSHOT)).toBe(false);
+  });
+});
+
+// ============================================================
 // NEW: on_chain_end state tracking
 // ============================================================
 
