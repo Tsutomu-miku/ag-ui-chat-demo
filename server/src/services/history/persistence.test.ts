@@ -131,6 +131,111 @@ describe("persistHistory", () => {
     });
   });
 
+  it("separates supervisor tool calls from a completed subagent message", () => {
+    const threadId = `thread-${crypto.randomUUID()}`;
+
+    persistHistory(threadId, [], [
+      { type: EventType.RUN_STARTED, threadId, runId: "run-scope-boundary-1" },
+      {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "audio-message",
+        role: "assistant",
+        extra: {
+          parentTaskToolCallId: "audio-task",
+          subagentRunId: "audio-run",
+          subagentName: "audio-composer",
+        },
+      },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "audio-message",
+        delta: "audio complete",
+      },
+      {
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: "audio-message",
+        extra: {
+          parentTaskToolCallId: "audio-task",
+          subagentRunId: "audio-run",
+          subagentName: "audio-composer",
+        },
+      },
+      {
+        type: EventType.TOOL_CALL_START,
+        parentMessageId: "supervisor-message",
+        toolCallId: "scene-tool",
+        toolCallName: "effect_house_toolbox",
+      },
+      {
+        type: EventType.TOOL_CALL_ARGS,
+        toolCallId: "scene-tool",
+        delta: '{"actions":[]}',
+      },
+      { type: EventType.TOOL_CALL_END, toolCallId: "scene-tool" },
+      { type: EventType.RUN_FINISHED, threadId, runId: "run-scope-boundary-1" },
+    ]);
+
+    const thread = getThread(threadId);
+
+    expect(thread?.messages).toHaveLength(2);
+    expect(thread?.messages[0]).toMatchObject({
+      id: "audio-message",
+      role: "assistant",
+      content: "audio complete",
+      extra: expect.objectContaining({
+        parentTaskToolCallId: "audio-task",
+        subagentName: "audio-composer",
+      }),
+    });
+    expect(thread?.messages[0]?.toolCalls).toBeUndefined();
+    expect(thread?.messages[1]).toMatchObject({
+      id: "supervisor-message",
+      role: "assistant",
+      toolCalls: [
+        {
+          id: "scene-tool",
+          type: "function",
+          function: {
+            name: "effect_house_toolbox",
+            arguments: '{"actions":[]}',
+          },
+          complete: true,
+        },
+      ],
+    });
+    expect(thread?.messages[1]?.extra?.parentTaskToolCallId).toBeUndefined();
+  });
+
+  it("does not write orphan tool args onto the current assistant message", () => {
+    const threadId = `thread-${crypto.randomUUID()}`;
+
+    persistHistory(threadId, [], [
+      { type: EventType.RUN_STARTED, threadId, runId: "run-orphan-args-1" },
+      { type: EventType.TEXT_MESSAGE_START, messageId: "assistant-orphan", role: "assistant" },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "assistant-orphan",
+        delta: "Still thinking.",
+      },
+      {
+        type: EventType.TOOL_CALL_ARGS,
+        toolCallId: "missing-tool",
+        delta: '{"bad":true}',
+      },
+      { type: EventType.TOOL_CALL_END, toolCallId: "missing-tool" },
+    ]);
+
+    const thread = getThread(threadId);
+
+    expect(thread?.messages).toHaveLength(1);
+    expect(thread?.messages[0]).toMatchObject({
+      id: "assistant-orphan",
+      role: "assistant",
+      content: "Still thinking.",
+    });
+    expect(thread?.messages[0]?.toolCalls).toBeUndefined();
+  });
+
   it("persists partial tool args before tool_end so replay can recover in-progress input", () => {
     const threadId = `thread-${crypto.randomUUID()}`;
 

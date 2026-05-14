@@ -202,6 +202,20 @@ export function persistHistory(
     currentAssistant = undefined;
   };
 
+  const ensureAssistantForMessage = (
+    messageId?: string,
+    event?: PersistableEvent,
+  ) => {
+    if (
+      currentAssistant?.id &&
+      messageId &&
+      currentAssistant.id !== messageId
+    ) {
+      flushAssistant();
+    }
+    return ensureAssistant(messageId, event);
+  };
+
   const ensureToolResultMessage = (
     messageId: string,
     toolCallId: string,
@@ -256,24 +270,18 @@ export function persistHistory(
 
     switch (event.type) {
       case EventType.TEXT_MESSAGE_START:
-        if (
-          currentAssistant?.id &&
-          event.messageId &&
-          currentAssistant.id !== event.messageId
-        ) {
-          flushAssistant();
-        }
-        ensureAssistant(event.messageId, event);
+        ensureAssistantForMessage(event.messageId, event);
         break;
       case EventType.TEXT_MESSAGE_CONTENT:
       case EventType.TEXT_MESSAGE_CHUNK:
-        ensureAssistant(event.messageId, event).content += event.delta || "";
+        ensureAssistantForMessage(event.messageId, event).content +=
+          event.delta || "";
         break;
       case EventType.TEXT_MESSAGE_END:
         break;
       case EventType.TOOL_CALL_START:
         if (!event.toolCallId || !event.toolCallName) break;
-        ensureAssistant(event.parentMessageId, event).toolCalls.push({
+        ensureAssistantForMessage(event.parentMessageId, event).toolCalls.push({
           id: event.toolCallId,
           type: "function",
           function: { name: event.toolCallName, arguments: "" },
@@ -283,7 +291,13 @@ export function persistHistory(
         break;
       case EventType.TOOL_CALL_ARGS: {
         if (!event.toolCallId) break;
-        const assistant = ensureAssistant(undefined, event);
+        const assistant = currentAssistant;
+        if (
+          !assistant ||
+          !assistant.toolCalls.some((item) => item.id === event.toolCallId)
+        ) {
+          break;
+        }
         const updated =
           (assistant.toolCallArgs.get(event.toolCallId) || "") +
           (event.delta || "");
@@ -293,6 +307,14 @@ export function persistHistory(
 
         assistant.toolCallArgs.set(event.toolCallId, updated);
         if (toolCall) toolCall.function.arguments = updated;
+        break;
+      }
+      case EventType.TOOL_CALL_END: {
+        if (!event.toolCallId || !currentAssistant) break;
+        const toolCall = currentAssistant.toolCalls.find(
+          (item) => item.id === event.toolCallId,
+        );
+        if (toolCall) toolCall.complete = true;
         break;
       }
       case EventType.TOOL_CALL_RESULT:

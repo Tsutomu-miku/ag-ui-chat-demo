@@ -15,6 +15,7 @@ export type StoredRole = "user" | "assistant" | "tool";
 
 export type StoredToolCall = ToolCall &
   Partial<{
+    complete: boolean;
     step: StoredStep;
     extra: StoredExtra;
   }>;
